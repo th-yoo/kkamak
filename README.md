@@ -1,8 +1,6 @@
 # kkamak
 
-kkamak is a completion gate: it stops a coding agent from claiming a turn is
-done until a check you configure — usually your test suite — actually passes.
-It works with Claude Code and opencode.
+kkamak is a completion gate: it stops a coding agent from claiming a turn is done until a check you configure — usually your test suite — actually passes. It works with Claude Code and opencode.
 
 ## Configuration: `gate.json`
 
@@ -21,62 +19,34 @@ Example:
 { "check": "bun test", "rounds": 2 }
 ```
 
-Keep the check cheap. It runs every time the agent tries to finish a turn in
-which it edited a file — not just once at the end of a session — so a slow
-check is paid repeatedly.
+Keep the check cheap. It runs every time the agent tries to finish a turn in which it edited a file — not just once at the end of a session — so a slow check is paid repeatedly.
 
 ## Installing — Claude Code
 
-This repo is a Claude Code plugin: `.claude-plugin/plugin.json` is the
-manifest and `hooks/hooks.json` registers the three hooks (`PostToolUse` on
-edit tools, `UserPromptSubmit`, `Stop`), each invoking
-`bun src/adapters/claude-code/hook-cli.ts <EventName>`. There is no published
-marketplace listing yet (`package.json` is `"private": true`, and Claude
-Code's `plugin install` only pulls from a configured marketplace), so load
-this checkout directly instead:
+This repo is a Claude Code plugin: `.claude-plugin/plugin.json` is the manifest and `hooks/hooks.json` registers the three hooks (`PostToolUse` on edit tools, `UserPromptSubmit`, `Stop`), each invoking `bun src/adapters/claude-code/hook-cli.ts <EventName>`. There is no published marketplace listing yet (`package.json` is `"private": true`, and Claude Code's `plugin install` only pulls from a configured marketplace), so load this checkout directly instead:
 
-- One session only: `claude --plugin-dir /path/to/kkamak` (repeatable flag).
-- Persisted across sessions without publishing anything: symlink this
-  checkout to `~/.claude/skills/kkamak` (user-wide) or
-  `.claude/skills/kkamak` inside a project (that project only) — Claude Code
-  auto-loads a plugin found there as `kkamak@skills-dir` starting next
-  session.
+- One session only: `claude --plugin-dir /path/to/kkamak` (repeatable flag; confirmed against `claude --help`).
+- Persisted: symlink this checkout to `~/.claude/skills/kkamak`. `claude plugin init --help` documents that path as auto-loading next session as `kkamak@skills-dir` — but only for a plugin it scaffolds there itself, not one symlinked in, so confirm on first use: edit a file, end your turn, expect a block message on a failing check. Silence means it never loaded — indistinguishable from a passing check, since kkamak fails open.
 
 ## Installing — opencode
 
-`src/adapters/opencode/plugin.ts` default-exports the plugin function opencode
-loads. opencode auto-loads any `.ts`/`.js` file it finds under a
-`plugin/`-or-`plugins/` directory — project-local (`.opencode/plugin/`) or
-global (`~/.config/opencode/plugin/`) — with no config entry required. There
-is no packaged distribution yet, so symlink (not copy) the adapter file into
-one of those directories, which keeps its relative imports into the rest of
-this checkout resolving correctly:
+`src/adapters/opencode/plugin.ts` default-exports the plugin function opencode loads. Confirmed by reading opencode's own loader: it auto-loads any `.ts`/`.js` file it finds under a `plugin/`-or-`plugins/` directory — project-local (`.opencode/plugin/`) or global (`~/.config/opencode/plugin/`) — no config entry needed. There is no packaged distribution yet, so symlink (not copy) the adapter file into one of those directories:
 
 ```bash
 ln -s /path/to/kkamak/src/adapters/opencode/plugin.ts .opencode/plugin/kkamak.ts
 ```
 
-opencode has no blocking stop hook, so a block is delivered by continuing the
-session: the adapter injects a user message carrying the check's output
-rather than refusing the stop.
+Confirmed with a local Bun reproduction: a module loaded via a symlink still resolves its own relative imports against the real target directory, so this checkout's internal imports keep working through the symlink. Not confirmed live: that opencode still expects this repo's exact plugin shape end to end — check yourself by editing a file and letting opencode go idle; on a failing check a message prefixed `[kkamak-gate]` should appear carrying the output. Silence means it never loaded — indistinguishable from a passing check. opencode has no blocking stop hook, so a block is delivered this way, by continuing the session, rather than by refusing the stop.
 
 ## Turning it off
 
-The gate re-reads `gate.json` on every event and holds nothing in memory.
-Edit or delete it and the change applies on the very next turn — no restart,
-no reinstall.
+The gate re-reads `gate.json` on every event and holds nothing in memory. Edit or delete it and the change applies on the very next turn — no restart, no reinstall.
 
-The gate also disarms itself: if the check *cannot be run* (a spawn failure,
-not a failing test) three times in a row for a session, the gate gives up on
-that session and allows everything through for the rest of it, with a notice
-telling you to check the `check` command. A normal failing check does not
-count toward this — only a check the gate could not execute at all.
+The gate also disarms itself: if the check *cannot be run* (a spawn failure, not a failing test) three times in a row for a session, the gate gives up on that session and allows everything through for the rest of it, with a notice telling you to check the `check` command. A normal failing check does not count toward this — only a check the gate could not execute at all.
 
 ## The sensor file
 
-Each completed gate cycle appends one JSON line to the sensor file (default
-`.km/gate-outcomes.ndjson`). Example, generated by driving the Claude Code
-hook CLI against a scratch repo:
+Each completed gate cycle appends one JSON line to the sensor file (default `.km/gate-outcomes.ndjson`). Example, generated by driving the Claude Code hook CLI against a scratch repo:
 
 ```json
 {"ts":1785388549418,"sessionId":"demo-session-1","check":"test -f .fail_once && rm .fail_once && exit 1 || exit 0","accepted":true,"gateExhausted":false,"interrupted":false,"rounds":["failed","passed"],"durationMs":42,"host":"yoo-dev","app":"claude-code","checkMs":[4,4]}
@@ -87,11 +57,10 @@ Fields:
 - `ts`, `sessionId`, `check`, `host`, `app` — identity and timing of the cycle.
 - `accepted` — true whenever the stop was ultimately allowed through.
 - `gateExhausted` — true when the `rounds` budget ran out rather than the check passing.
-- `interrupted` — true when a new user prompt preempted an open cycle.
+- `interrupted` — true whenever a new user prompt cut measurement short: preempting an open cycle, or (see `skippedStop`) arriving before one ever reached a stop.
 - `rounds` — `"passed"`/`"failed"` per check attempt in the cycle.
 - `durationMs` — whole-cycle wall time, including agent think time, subagent runs and human wait.
 - `checkMs` *(optional)* — per-round check execution time only, parallel to `rounds`. `durationMs` alone can't tell you what the check itself costs: an observed 420-second cycle contained a ~1-second check.
-- `skippedStop` *(optional)* — present and `true` only on a diagnostic line: a queued user message consumed a turn boundary before a stop was ever delivered, so no check ran and `rounds` is empty. Without it, that session would look identical to one with no edits at all.
+- `skippedStop` *(optional)* — present and `true` only on a diagnostic line: a queued user message consumed a turn boundary before a stop was ever delivered, so no check ran and `rounds` is empty. The session stays armed, so the next real stop still measures the accumulated edits. Without this field, that session would look identical to one with no edits at all.
 
-Both optional fields may be absent from any given line; a consumer must
-tolerate that.
+Both optional fields may be absent from any given line; a consumer must tolerate that.
