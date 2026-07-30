@@ -405,14 +405,33 @@ describe("fail-open: no port failure may wedge a session", () => {
     expect(await gate.handle(stop)).toEqual({ kind: "allow" })
   })
 
-  test("a throwing clock allows", async () => {
+  // Must arm first: an unedited session returns before the clock is ever read,
+  // so without the edit this test passes whether or not the clock is guarded.
+  test("a clock that throws while starting a cycle allows", async () => {
     const h = makeHarness({ fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
     h.host.clock = {
       now: () => {
         throw new Error("no clock")
       },
     }
+    expect(await gate.handle(stop)).toEqual({ kind: "allow" })
+  })
+
+  // The clock is only read on the paths that stamp a duration: the first stop
+  // of a cycle, and the stop that ends one. A continuing stop that blocks
+  // again never reads it, so the exhausting stop has to be the one that throws.
+  test("a clock that throws while ending a cycle allows", async () => {
+    const h = makeHarness({ raw: '{"check":"x","rounds":1}', fallback: FAIL })
     const gate = createGate(h.host)
+    await gate.handle(edit)
+    expect(await gate.handle(stop)).toMatchObject({ kind: "block", round: 1 })
+    h.host.clock = {
+      now: () => {
+        throw new Error("no clock")
+      },
+    }
     expect(await gate.handle(stop)).toEqual({ kind: "allow" })
   })
 
