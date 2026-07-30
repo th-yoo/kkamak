@@ -1472,8 +1472,9 @@ describe("installation shape", () => {
   // a dangling relative import ships as a plugin that silently never runs. A
   // curated list of entrypoints cannot see that; the import closure can.
   test("every file the adapters import is present", () => {
-    const files = importClosure(["src/adapters/claude-code/hook-cli.ts", "src/adapters/opencode/plugin.ts"])
-    expect(files.size).toBeGreaterThan(10)
+    const files = closure() // walks ENTRYPOINTS, both adapter entry points
+    // Calibrated against the observed closure, not a round number.
+    expect(files.size).toBeGreaterThanOrEqual(18)
     for (const rel of [
       "src/adapters/claude-code/emit.ts",
       "src/adapters/claude-code/hook-input.ts",
@@ -1491,7 +1492,7 @@ describe("installation shape", () => {
   })
 
   // Nothing imports these, so the closure cannot reach them.
-  test("the manifests installation needs are present", () => {
+  test("the manifests installation relies on are present", () => {
     for (const rel of [".claude-plugin/plugin.json", "hooks/hooks.json", "package.json"]) {
       expect(fs.existsSync(path.join(ROOT, rel))).toBe(true)
     }
