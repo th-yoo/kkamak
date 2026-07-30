@@ -32,6 +32,23 @@ the day's sensor numbers, and mechanism observations the sensor stream
 cannot see (behavioral shifts, qualitative saves, instrument anomalies).
 This file is proposer evidence — keep entries factual and dated.
 
+## 2026-07-30 — MacBook setup review finding: sensor contract divergence (yoo-mac.local)
+
+- No sensor numbers — MacBook stream empty at entry time (repo freshly
+  cloned, 0.2.1 installed plugin verified, dogfood session opened).
+- **Instrument anomaly (latent): this repo's sensor line emits `sessionId`;
+  the installed kkamak's frozen `SensorLine` contract is `sessionID`**
+  (meta-harness `cc-gate-plugin/src/types.ts:152`). The §4.3 trial join and
+  the scorecard both key on `sessionID`, so if this repo's own stream ever
+  feeds meta-harness tooling, its lines silently fail to join — same
+  failure shape as an unmatched-exposure exclusion, invisible in output.
+  Same-name default sensor file (`.km/gate-outcomes.ndjson`) makes
+  accidental interleave of the two dialects possible if both
+  implementations ever gate one repo. Fix direction: rename to `sessionID`
+  (or adopt the frozen contract wholesale — `pluginVersion`/`forced` are
+  also absent here) no later than the packaging/marketplace milestone,
+  before any consumer exists.
+
 ## 2026-07-30 — adapters merged + round-1 aftermath (yoo-dev)
 
 - **Harness adapters DONE, merged, pushed** (260 tests, tsc clean): CC
