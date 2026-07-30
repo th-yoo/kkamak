@@ -68,27 +68,71 @@ describe("Claude Code plugin manifests", () => {
 })
 
 describe("installation shape", () => {
-  test("every file installation must copy is present", () => {
+  // Nothing imports these, so the transitive-closure walk below can never
+  // reach them — they need their own existence assertion.
+  test("the manifests installation relies on are present", () => {
+    for (const rel of [".claude-plugin/plugin.json", "hooks/hooks.json", "package.json"]) {
+      expect(fs.existsSync(path.join(ROOT, rel))).toBe(true)
+    }
+  })
+
+  const ENTRYPOINTS = ["src/adapters/claude-code/hook-cli.ts", "src/adapters/opencode/plugin.ts"]
+
+  // Installation copies this directory out of the repo, so the only files
+  // that matter are the ones actually reachable by relative import from an
+  // entrypoint. A curated list drifts silently when a module is deleted or a
+  // helper is renamed; walking the real closure cannot.
+  function closure(): Set<string> {
+    const seen = new Set<string>()
+    const queue = [...ENTRYPOINTS]
+    while (queue.length) {
+      const rel = queue.pop()!
+      if (seen.has(rel)) continue
+      seen.add(rel)
+      const src = fs.readFileSync(path.join(ROOT, rel), "utf8")
+      for (const [, spec] of src.matchAll(/from\s+"(\.[^"]+)"/g)) {
+        queue.push(path.relative(ROOT, path.resolve(path.dirname(path.join(ROOT, rel)), spec!)))
+      }
+    }
+    return seen
+  }
+
+  test("every file the adapters import is present", () => {
+    const files = closure()
+    // Observed closure size is 18 (2 entrypoints + 16 transitively imported
+    // files: both adapters' own helpers, shared framing, and every kernel and
+    // runtime module). A closure that silently resolved to just the two
+    // entrypoints — e.g. because the regex stopped matching — must fail here,
+    // not pass vacuously.
+    expect(files.size).toBeGreaterThanOrEqual(18)
     for (const rel of [
-      ".claude-plugin/plugin.json",
-      "hooks/hooks.json",
-      "package.json",
-      "src/kernel/index.ts",
-      "src/runtime/index.ts",
-      "src/adapters/claude-code/hook-cli.ts",
-      "src/adapters/opencode/plugin.ts",
+      "src/adapters/claude-code/emit.ts",
+      "src/adapters/claude-code/hook-input.ts",
+      "src/adapters/opencode/opencode-types.ts",
+      "src/adapters/shared/framing.ts",
+      "src/kernel/gate.ts",
+      "src/runtime/file-state-store.ts",
     ]) {
+      expect(files.has(rel)).toBe(true)
+    }
+    for (const rel of files) {
+      expect(rel.startsWith("..")).toBe(false) // never escapes the package root
       expect(fs.existsSync(path.join(ROOT, rel))).toBe(true)
     }
   })
 
   // The adapter's comments name the package on purpose — to say it must not be
-  // imported — so this scans import statements, not prose.
+  // imported — so this scans import statements, not prose. Beyond the usual
+  // clause form, the regex also matches a bare dynamic-import call with no
+  // introducing keyword and no space before the specifier, plus a require
+  // call — either of which could otherwise slip an SDK dependency in unseen.
   test("the opencode adapter does not import the opencode SDK", () => {
     const dir = path.join(ROOT, "src/adapters/opencode")
     for (const name of fs.readdirSync(dir)) {
       const source = fs.readFileSync(path.join(dir, name), "utf8")
-      const specifiers = [...source.matchAll(/(?:from|import|require\()\s*["'`]([^"'`]+)["'`]/g)]
+      const specifiers = [
+        ...source.matchAll(/(?:\bfrom\s+|\bimport\s*\(?\s*|\brequire\s*\()["'`]([^"'`]+)["'`]/g),
+      ]
       expect(specifiers.map((m) => m[1])).not.toContain("@opencode-ai/plugin")
       for (const [, specifier] of specifiers) {
         expect(specifier).not.toStartWith("@opencode-ai")
