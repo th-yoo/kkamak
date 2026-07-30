@@ -581,12 +581,24 @@ describe("truncateEvidence", () => {
     expect(truncateEvidence(fits)).toBe(fits)
   })
 
-  // Slicing bytes can cut through a character; the harness must never see the
-  // wreckage. The pad walks the cut across every byte offset of a three-byte
-  // character — a homogeneous "✓".repeat(n) filler always lands on the same
-  // alignment and so proves almost nothing.
-  test.each([0, 1, 2, 3])("never emits a broken code point at the cut (pad %i)", (pad) => {
-    const out = truncateEvidence(`${"a".repeat(pad)}\u2713${"a".repeat(MAX_EVIDENCE_BYTES)}END`)
+  // ✓ is 3 bytes (E2 9C 93: a lead byte then two continuation bytes). A
+  // byte cut can land 1 or 2 bytes into that sequence, stranding the
+  // remaining continuation byte(s) at the front of the kept slice — the two
+  // genuinely broken alignments a 3-byte character can produce. (0 and 3 are
+  // the clean cases — checkmark fully kept or fully dropped — and need no
+  // test here.)
+  //
+  // Correction (2026-07-30, post-merge fix pass): an earlier draft of this
+  // test padded the front with `"a".repeat(pad)` and held the trailing
+  // length fixed. That's wrong — `pad` cancels out of the cut-position
+  // formula entirely (the number of bytes dropped is always `pad + 6` for
+  // that layout, so the cut always lands exactly 3 bytes past the
+  // checkmark's end, for every pad in 0-3 — never inside it). The knob that
+  // actually matters is the *trailing* length, since that's what determines
+  // where the cut lands relative to the checkmark's fixed 3-byte span.
+  test.each([1, 2])("never emits a broken code point when the cut strands %i continuation byte(s)", (stray) => {
+    const trailingLen = MAX_EVIDENCE_BYTES - 6 + stray
+    const out = truncateEvidence(`\u2713${"a".repeat(trailingLen)}END`)
     expect(out).not.toContain("\uFFFD")
     expect(out).toContain("END")
     expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(MAX_EVIDENCE_BYTES + 200)

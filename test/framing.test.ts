@@ -72,12 +72,15 @@ describe("truncateEvidence", () => {
     expect(truncated).not.toContain("�")
   })
 
-  // Slicing bytes can cut through a character; the harness must never see the
-  // wreckage. The pad walks the cut across every byte offset of a three-byte
-  // character — a homogeneous "✓".repeat(n) filler always lands on the same
-  // alignment and so proves almost nothing.
-  test.each([0, 1, 2, 3])("never emits a broken code point at the cut (pad %i)", (pad) => {
-    const out = truncateEvidence(`${"a".repeat(pad)}✓${"a".repeat(MAX_EVIDENCE_BYTES)}END`)
+  // ✓ is 3 bytes (E2 9C 93: a lead byte then two continuation bytes). A byte
+  // cut can land 1 or 2 bytes into that sequence, stranding the remaining
+  // continuation byte(s) at the front of the kept slice — the two genuinely
+  // broken alignments a 3-byte character can produce. (0 and 3 are the clean
+  // cases — checkmark fully kept or fully dropped — and need no test here.)
+  test.each([1, 2])("never emits a broken code point when the cut strands %i continuation byte(s)", (stray) => {
+    const trailingLen = MAX_EVIDENCE_BYTES - 6 + stray
+    const evidence = `✓${"a".repeat(trailingLen)}END`
+    const out = truncateEvidence(evidence)
     expect(out).not.toContain("�")
     expect(out).toContain("END")
     expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(MAX_EVIDENCE_BYTES + 200)
