@@ -36,7 +36,7 @@ This repo is a Claude Code plugin: `.claude-plugin/plugin.json` is the manifest 
 ln -s /path/to/kkamak/src/adapters/opencode/plugin.ts .opencode/plugin/kkamak.ts
 ```
 
-Confirmed with a local Bun reproduction: a module loaded via a symlink still resolves its own relative imports against the real target directory, so this checkout's internal imports keep working through the symlink. Not confirmed live: that opencode still expects this repo's exact plugin shape end to end — check yourself by editing a file and letting opencode go idle; on a failing check a message prefixed `[kkamak-gate]` should appear carrying the output. Silence means it never loaded — indistinguishable from a passing check. opencode has no blocking stop hook, so a block is delivered this way, by continuing the session, rather than by refusing the stop.
+Confirmed by reading further into the loader: it imports whatever path the directory scan found exactly as given, without first resolving a symlink to its real path. Confirmed with a local Bun reproduction of that same mechanism: a module loaded that way still resolves its own relative imports against its real target directory, not the symlink's — so this checkout's internal imports keep working through the symlink. Not confirmed live: that opencode still expects this repo's exact plugin shape end to end. opencode has no blocking stop hook, so a block is delivered by continuing the session: the adapter injects a user message prefixed `[kkamak-gate]` carrying the check's output, rather than refusing the stop. Check this yourself on first use — edit a file and let opencode go idle; silence means the plugin never loaded, which looks exactly like a passing check since kkamak fails open.
 
 ## Turning it off
 
