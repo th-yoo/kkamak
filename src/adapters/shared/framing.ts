@@ -7,8 +7,13 @@ type BlockDecision = Extract<GateDecision, { kind: "block" }>
 
 /** Keeps the tail: a test runner's summary is at the end of its output. */
 export function truncateEvidence(evidence: string): string {
-  if (evidence.length <= MAX_EVIDENCE_BYTES) return evidence
-  return `…output truncated, showing the last ${MAX_EVIDENCE_BYTES} characters…\n${evidence.slice(-MAX_EVIDENCE_BYTES)}`
+  const bytes = Buffer.from(evidence, "utf8")
+  if (bytes.length <= MAX_EVIDENCE_BYTES) return evidence
+  // Tail, on a code-point boundary: a test runner's summary is at the end.
+  const tail = new TextDecoder("utf-8", { fatal: false })
+    .decode(bytes.subarray(bytes.length - MAX_EVIDENCE_BYTES))
+    .replace(/^�/, "")
+  return `…output truncated, showing the last ${MAX_EVIDENCE_BYTES} bytes…\n${tail}`
 }
 
 export function composeBlockMessage(decision: BlockDecision): string {

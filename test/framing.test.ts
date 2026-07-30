@@ -50,4 +50,41 @@ describe("truncateEvidence", () => {
     const out = truncateEvidence("x".repeat(MAX_EVIDENCE_BYTES * 3))
     expect(out.length).toBeLessThanOrEqual(MAX_EVIDENCE_BYTES + 200)
   })
+
+  test("respects the byte cap with multi-byte UTF-8 characters", () => {
+    // ✓ is 3 bytes in UTF-8, 1 code unit in .length
+    const evidence = "✓".repeat(MAX_EVIDENCE_BYTES)
+    const truncated = truncateEvidence(evidence)
+    const byteLength = Buffer.byteLength(truncated, "utf8")
+    expect(byteLength).toBeLessThanOrEqual(MAX_EVIDENCE_BYTES + 200)
+  })
+
+  test("returns unchanged when multi-byte evidence fits the byte cap", () => {
+    // 5000 code units of ✓ = 15000 UTF-8 bytes, fits under 16000
+    const evidence = "✓".repeat(5000)
+    const truncated = truncateEvidence(evidence)
+    expect(truncated).toBe(evidence)
+  })
+
+  test("never produces a replacement character when cutting multi-byte text", () => {
+    const evidence = "✓".repeat(MAX_EVIDENCE_BYTES)
+    const truncated = truncateEvidence(evidence)
+    expect(truncated).not.toContain("�")
+  })
+})
+
+describe("composeBlockMessage with multi-byte UTF-8", () => {
+  test("keeps composed message within byte budget for multi-byte evidence", () => {
+    const evidence = "✓".repeat(MAX_EVIDENCE_BYTES)
+    const message = composeBlockMessage(block({ evidence }))
+    const byteLength = Buffer.byteLength(message, "utf8")
+    // Message includes the evidence plus framing text, but should stay reasonable
+    expect(byteLength).toBeLessThan(MAX_EVIDENCE_BYTES * 1.5)
+  })
+
+  test("composed message with multi-byte evidence has no replacement characters", () => {
+    const evidence = "✓".repeat(MAX_EVIDENCE_BYTES)
+    const message = composeBlockMessage(block({ evidence }))
+    expect(message).not.toContain("�")
+  })
 })
