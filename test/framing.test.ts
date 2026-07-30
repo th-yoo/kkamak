@@ -71,6 +71,32 @@ describe("truncateEvidence", () => {
     const truncated = truncateEvidence(evidence)
     expect(truncated).not.toContain("�")
   })
+
+  test("handles all three byte-alignment cases without replacement characters", () => {
+    // ✓ is 3 bytes. By varying the ASCII pad before it, we shift which byte of
+    // the ✓ the MAX_EVIDENCE_BYTES boundary lands in. All three alignments must
+    // produce no replacement characters and preserve the tail.
+    for (const pad of [0, 1, 2]) {
+      const evidence = "a".repeat(100 + pad) + "✓" + "a".repeat(15898 - pad) + "END-MARKER"
+      const truncated = truncateEvidence(evidence)
+      // No replacement character at any alignment
+      expect(truncated.includes("�")).toBe(false)
+      // Byte budget respected
+      expect(Buffer.byteLength(truncated, "utf8")).toBeLessThanOrEqual(MAX_EVIDENCE_BYTES + 200)
+      // Tail preserved (the summary)
+      expect(truncated).toContain("END-MARKER")
+    }
+  })
+
+  test("character straddling boundary is either intact or absent, never partial", () => {
+    // Place ✓ exactly at the boundary so the cut lands within it
+    const evidence = "a".repeat(100) + "✓" + "a".repeat(15998)
+    const truncated = truncateEvidence(evidence)
+    // The ✓ should either be present (if kept) or absent (if cut), never as replacement chars
+    const containsCheckmark = truncated.includes("✓")
+    const containsReplacement = truncated.includes("�")
+    expect(containsCheckmark || !containsReplacement).toBe(true)
+  })
 })
 
 describe("composeBlockMessage with multi-byte UTF-8", () => {
