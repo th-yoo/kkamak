@@ -582,9 +582,14 @@ describe("truncateEvidence", () => {
   })
 
   // Slicing bytes can cut through a character; the harness must never see the
-  // wreckage.
-  test("never emits a broken code point at the cut", () => {
-    expect(truncateEvidence("\u2713".repeat(MAX_EVIDENCE_BYTES))).not.toContain("\uFFFD")
+  // wreckage. The pad walks the cut across every byte offset of a three-byte
+  // character — a homogeneous "✓".repeat(n) filler always lands on the same
+  // alignment and so proves almost nothing.
+  test.each([0, 1, 2, 3])("never emits a broken code point at the cut (pad %i)", (pad) => {
+    const out = truncateEvidence(`${"a".repeat(pad)}\u2713${"a".repeat(MAX_EVIDENCE_BYTES)}END`)
+    expect(out).not.toContain("\uFFFD")
+    expect(out).toContain("END")
+    expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(MAX_EVIDENCE_BYTES + 200)
   })
 })
 ```
@@ -610,16 +615,20 @@ type BlockDecision = Extract<GateDecision, { kind: "block" }>
  *
  * Measured in UTF-8 bytes, not code units — a test runner's output is full of
  * `✓`/`✗`/box-drawing glyphs at three bytes each, so a `.length` cap would let
- * a "16,000-byte" message reach ~48 KB on wire. The tail is decoded
- * non-fatally and a leading replacement character dropped, so a cut through
- * the middle of a character never reaches the harness.
+ * a "16,000-byte" message reach ~48 KB on the wire.
  */
 export function truncateEvidence(evidence: string): string {
   const bytes = Buffer.from(evidence, "utf8")
   if (bytes.length <= MAX_EVIDENCE_BYTES) return evidence
-  const tail = new TextDecoder("utf-8", { fatal: false })
-    .decode(bytes.subarray(bytes.length - MAX_EVIDENCE_BYTES))
-    .replace(/^�/, "")
+
+  // Slicing bytes can land mid-character. Skipping its stray continuation
+  // bytes (10xxxxxx) before decoding means no replacement character is ever
+  // produced, whatever the alignment — repairing the decoded string after the
+  // fact only handles the alignments you thought of.
+  let start = bytes.length - MAX_EVIDENCE_BYTES
+  while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) start++
+  const tail = bytes.subarray(start).toString("utf8")
+
   return `…output truncated, showing the last ${MAX_EVIDENCE_BYTES} bytes…\n${tail}`
 }
 
