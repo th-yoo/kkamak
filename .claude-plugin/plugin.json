@@ -1,0 +1,5 @@
+{
+  "name": "kkamak",
+  "version": "0.3.0",
+  "description": "kkamak completion gate — Claude Code cannot say done until your check passes"
+}
