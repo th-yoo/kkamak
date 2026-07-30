@@ -72,20 +72,15 @@ describe("truncateEvidence", () => {
     expect(truncated).not.toContain("�")
   })
 
-  test("handles all three byte-alignment cases without replacement characters", () => {
-    // ✓ is 3 bytes. By varying the ASCII pad before it, we shift which byte of
-    // the ✓ the MAX_EVIDENCE_BYTES boundary lands in. All three alignments must
-    // produce no replacement characters and preserve the tail.
-    for (const pad of [0, 1, 2]) {
-      const evidence = "a".repeat(100 + pad) + "✓" + "a".repeat(15898 - pad) + "END-MARKER"
-      const truncated = truncateEvidence(evidence)
-      // No replacement character at any alignment
-      expect(truncated.includes("�")).toBe(false)
-      // Byte budget respected
-      expect(Buffer.byteLength(truncated, "utf8")).toBeLessThanOrEqual(MAX_EVIDENCE_BYTES + 200)
-      // Tail preserved (the summary)
-      expect(truncated).toContain("END-MARKER")
-    }
+  // Slicing bytes can cut through a character; the harness must never see the
+  // wreckage. The pad walks the cut across every byte offset of a three-byte
+  // character — a homogeneous "✓".repeat(n) filler always lands on the same
+  // alignment and so proves almost nothing.
+  test.each([0, 1, 2, 3])("never emits a broken code point at the cut (pad %i)", (pad) => {
+    const out = truncateEvidence(`${"a".repeat(pad)}✓${"a".repeat(MAX_EVIDENCE_BYTES)}END`)
+    expect(out).not.toContain("�")
+    expect(out).toContain("END")
+    expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(MAX_EVIDENCE_BYTES + 200)
   })
 
   test("character straddling boundary is either intact or absent, never partial", () => {
