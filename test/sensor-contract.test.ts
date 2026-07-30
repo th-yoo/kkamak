@@ -20,14 +20,22 @@
 // Required field truth (from the frozen contract, cross-checked against the
 // vector lines): ts, sessionID, check, accepted, gateExhausted, interrupted,
 // rounds, durationMs, host, app, marker. Optional and tolerated-absent:
-// checkMs, pluginVersion, forced, skippedStop. D1 (ratified): pluginVersion
-// and forced are explicitly DEFERRED to a packaging milestone — this
-// kernel must not emit them yet, so this file also asserts their absence.
+// checkMs, pluginVersion, forced, skippedStop. D1 (closed, packaging
+// milestone): pluginVersion and forced are adopted into this kernel's
+// emission path (src/kernel/sensor.ts). This kernel always knows its own
+// version, so pluginVersion is now stamped on every line; forced has no
+// applicable mechanism here (the frozen contract scopes it to
+// KKAMAK_REINJECT, which this kernel does not implement), so it stays
+// absent in practice even though the plumbing exists. This file now
+// asserts contract-conformant shape for both — present-and-typed or
+// absent, per the contract's own tolerated-absent optionality — rather
+// than a blanket ban on their presence.
 
 import { describe, expect, test } from "bun:test"
 import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 import { createGate } from "../src/kernel/gate.ts"
+import { KERNEL_VERSION } from "../src/kernel/sensor.ts"
 import type { RoundOutcome } from "../src/kernel/ports.ts"
 import { FAIL, FakeClock, makeHarness, PASS } from "./fakes.ts"
 
@@ -87,10 +95,18 @@ function assertConformsToSensorContract(line: Record<string, unknown>): void {
     expect(typeof line.skippedStop).toBe("boolean")
   }
 
-  // D1 (ratified): pluginVersion/forced porting is deferred to the packaging
-  // milestone — this kernel's emission path must not add them yet.
-  expect(line).not.toHaveProperty("pluginVersion")
-  expect(line).not.toHaveProperty("forced")
+  // D1 (closed): pluginVersion is always stamped by this kernel — asserted
+  // present, not merely tolerated, because that is this kernel's actual
+  // emission behavior (the frozen contract only requires tolerating absence
+  // from producers that can't determine their own version).
+  expect(typeof line.pluginVersion).toBe("string")
+  expect(line.pluginVersion).toBe(KERNEL_VERSION)
+  // forced has no applicable mechanism in this kernel (see header comment),
+  // so it stays absent — but a future producer that does set it must still
+  // conform to the contract's type.
+  if ("forced" in line) {
+    expect(typeof line.forced).toBe("boolean")
+  }
 }
 
 describe("sensor contract: driven-kernel emission conforms to the frozen SensorLine", () => {

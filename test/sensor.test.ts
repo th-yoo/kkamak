@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { buildSensorLine, OPTIONAL_SENSOR_FIELDS, SENSOR_FIELDS } from "../src/kernel/sensor.ts"
+import { buildSensorLine, KERNEL_VERSION, OPTIONAL_SENSOR_FIELDS, SENSOR_FIELDS } from "../src/kernel/sensor.ts"
 import type { HostInfo, SensorLine } from "../src/kernel/ports.ts"
 
 const info: HostInfo = { app: "opencode", host: "test-host" }
@@ -21,7 +21,7 @@ describe("buildSensorLine", () => {
     expect(Object.keys(line).sort()).toEqual([...SENSOR_FIELDS].sort())
   })
 
-  test("declares the eleven agreed fields", () => {
+  test("declares the twelve agreed fields", () => {
     expect([...SENSOR_FIELDS].sort()).toEqual([
       "accepted",
       "app",
@@ -31,10 +31,19 @@ describe("buildSensorLine", () => {
       "host",
       "interrupted",
       "marker",
+      "pluginVersion",
       "rounds",
       "sessionID",
       "ts",
     ])
+  })
+
+  // D1 (closed): pluginVersion is now adopted — this kernel always knows its
+  // own version, so unlike the frozen contract's tolerated-absent optional,
+  // buildSensorLine never omits it.
+  test("stamps pluginVersion from the kernel's own package version", () => {
+    const line = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds] })
+    expect(line.pluginVersion).toBe(KERNEL_VERSION)
   })
 
   // The consumer's frozen contract requires `marker` on every line. This
@@ -118,16 +127,17 @@ describe("buildSensorLine", () => {
 })
 
 describe("additive fields", () => {
-  test("declares the two optional fields", () => {
-    expect([...OPTIONAL_SENSOR_FIELDS].sort()).toEqual(["checkMs", "skippedStop"])
+  test("declares the three optional fields", () => {
+    expect([...OPTIONAL_SENSOR_FIELDS].sort()).toEqual(["checkMs", "forced", "skippedStop"])
   })
 
   // Existing consumers must not have to learn a new field to keep working.
-  test("omits both when not supplied, so an ordinary line is unchanged", () => {
+  test("omits all three when not supplied, so an ordinary line is unchanged", () => {
     const line = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds] })
     expect(Object.keys(line).sort()).toEqual([...SENSOR_FIELDS].sort())
     expect("checkMs" in line).toBe(false)
     expect("skippedStop" in line).toBe(false)
+    expect("forced" in line).toBe(false)
   })
 
   test("carries per-round check times parallel to rounds", () => {
@@ -164,6 +174,22 @@ describe("additive fields", () => {
       checkMs: [],
       skippedStop: true,
     })
+    expect(JSON.parse(JSON.stringify(line))).toEqual(line)
+    expect(JSON.stringify(line)).not.toContain("\n")
+  })
+
+  // D1 (closed): forced is now plumbed through, but this kernel has no
+  // reinject-arm mechanism (KKAMAK_REINJECT is the frozen contract's sole
+  // trigger, per cc-gate-plugin/src/types.ts) — no current caller ever
+  // passes it, so it stays absent in practice. This test only proves the
+  // plumbing works if a future caller does.
+  test("marks a forced session", () => {
+    const line = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds], forced: true })
+    expect(line.forced).toBe(true)
+  })
+
+  test("a forced line survives a JSON round trip", () => {
+    const line = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds], forced: true })
     expect(JSON.parse(JSON.stringify(line))).toEqual(line)
     expect(JSON.stringify(line)).not.toContain("\n")
   })

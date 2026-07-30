@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test"
 import fs from "node:fs"
 import path from "node:path"
 import { EDIT_TOOLS, HOOK_EVENTS } from "../src/adapters/claude-code/hook-input.ts"
+import { KERNEL_VERSION } from "../src/kernel/sensor.ts"
 
 const ROOT = path.resolve(import.meta.dir, "..")
 const read = (rel: string) => JSON.parse(fs.readFileSync(path.join(ROOT, rel), "utf8")) as Record<string, unknown>
@@ -25,6 +26,13 @@ describe("Claude Code plugin manifests", () => {
 
   test("plugin.json version matches package.json", () => {
     expect(read(".claude-plugin/plugin.json").version).toBe(read("package.json").version)
+  })
+
+  // KERNEL_VERSION is a literal (sensor.ts stays I/O-free) rather than read
+  // from package.json at runtime, so it can silently drift on a version
+  // bump. This guards it the same way the plugin.json check above does.
+  test("sensor.ts's KERNEL_VERSION matches package.json", () => {
+    expect(read("package.json").version).toBe(KERNEL_VERSION)
   })
 
   test("registers exactly the events the adapter handles", () => {

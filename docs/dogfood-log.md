@@ -32,6 +32,40 @@ the day's sensor numbers, and mechanism observations the sensor stream
 cannot see (behavioral shifts, qualitative saves, instrument anomalies).
 This file is proposer evidence — keep entries factual and dated.
 
+## 2026-07-31 — D1 closure: pluginVersion/forced adopted (yoo-dev)
+
+Closes the D1 deferral recorded below (packaging milestone, ahead of
+schedule — landed before the marketplace milestone it was originally
+pinned to), per the frozen `SensorLine` contract
+(meta-harness `cc-gate-plugin/src/types.ts`).
+
+- **`pluginVersion?: string` adopted, always stamped.** New `KERNEL_VERSION`
+  constant in `src/kernel/sensor.ts` ("0.3.0"), stamped on every line by
+  `buildSensorLine` — this kernel always knows its own version, unlike the
+  frozen contract's general "producer may not know" case that makes the
+  field optional there. Kept as a literal rather than a `package.json`
+  read to keep the kernel I/O-free; a new `test/packaging.test.ts` case
+  guards it against drifting from `package.json`'s `version`.
+- **`forced?: boolean` adopted, never emitted.** Plumbed through
+  `SensorArgs` and `OPTIONAL_SENSOR_FIELDS` so a future feature can set it,
+  but no caller does today: the frozen contract scopes `forced` to
+  `KKAMAK_REINJECT` (an env override forcing the reinject-arm choice) and
+  this kernel has no reinject-arm mechanism at all. Confirmed against the
+  actual contract source (not just this repo's own doc comments) before
+  landing — `forced` is not a generic "the gate forced this decision"
+  flag, it is specific to that one env override.
+- **`test/sensor-contract.test.ts` assertions flipped**, per plan: the two
+  `expect(line).not.toHaveProperty(...)` bans (D1-deferred, "must never
+  appear") became contract-conformant conformance checks — `pluginVersion`
+  now asserted present-and-typed (this kernel's actual behavior), `forced`
+  asserted typed-if-present (tolerated-absent, since nothing sets it yet).
+  `test/fixtures/sensor-contract.ndjson` untouched, as required — the
+  golden vectors already carried both fields (copied byte-for-byte from
+  meta-harness), so no drift was ever possible there.
+- Suite: 268 → 272 (4 new: pluginVersion stamp + field-count update, forced
+  plumbing + round-trip, packaging drift guard). `bunx tsc --noEmit`
+  clean. Kernel-side only, no adapter or config changes.
+
 ## 2026-07-30 — sensor contract conformance fix (phase 0, meta-harness §4.3 build)
 
 Fixes the drift flagged by the MacBook setup review finding below, plus two

@@ -84,11 +84,30 @@ export interface SensorLine {
    * default OFF. This kernel has no marker/session-carryover mechanism at
    * all yet, so `buildSensorLine` always stamps `false` here — see its doc
    * comment. DEFERRED to a later milestone: implementing real marker
-   * tracking. Also deferred (D1, phase-0 scope): `pluginVersion` and
-   * `forced`, tolerated-absent optionals on the frozen contract that this
-   * kernel does not emit — packaging milestone, not phase 0.
+   * tracking (unrelated to the D1 packaging deferral below, which is
+   * closed).
    */
   marker: boolean
+  /**
+   * kkamak kernel version that emitted this line, e.g. "0.3.1" — this
+   * kernel's own `package.json` version (`KERNEL_VERSION` in sensor.ts),
+   * never the harness's. Optional on the frozen contract because a producer
+   * may be unable to determine its own version; this kernel always can, so
+   * `buildSensorLine` always stamps it. D1 (closed): adopted from the
+   * packaging-milestone deferral.
+   */
+  pluginVersion?: string
+  /**
+   * True iff an env override forced this session's reinject arm rather than
+   * being chosen normally. The frozen contract's `forced` covers
+   * KKAMAK_REINJECT ONLY (cc-gate-plugin/src/types.ts) — this kernel has no
+   * reinject-arm mechanism at all, so nothing here can set it today; it is
+   * plumbed through `SensorArgs` so a future reinject feature can, matching
+   * the contract's optionality (absent means not forced; a stored `false`
+   * is never written, same convention as `skippedStop`). D1 (closed):
+   * adopted from the packaging-milestone deferral.
+   */
+  forced?: boolean
 }
 
 // ── Events in ───────────────────────────────────────────────────────────────

@@ -1,6 +1,15 @@
 import type { Clock, HostInfo, RoundOutcome, SensorLine } from "./ports.ts"
 
 /**
+ * This kernel's own version, stamped into every sensor line's
+ * `pluginVersion` field (D1, closed). Must match `package.json`'s
+ * `version` — guarded by a test (test/packaging.test.ts) rather than read
+ * from the file at runtime, so this stays a plain literal and the kernel
+ * stays free of I/O.
+ */
+export const KERNEL_VERSION = "0.3.0"
+
+/**
  * The sensor schema, declared as data so a test can assert the built line
  * carries exactly these keys. Adding a field to SensorLine without adding it
  * here (or vice versa) fails the suite rather than silently producing lines
@@ -18,6 +27,7 @@ export const SENSOR_FIELDS = [
   "host",
   "app",
   "marker",
+  "pluginVersion",
 ] as const satisfies readonly (keyof SensorLine)[]
 
 /**
@@ -27,6 +37,7 @@ export const SENSOR_FIELDS = [
 export const OPTIONAL_SENSOR_FIELDS = [
   "checkMs",
   "skippedStop",
+  "forced",
 ] as const satisfies readonly (keyof SensorLine)[]
 
 export interface SensorArgs {
@@ -39,6 +50,8 @@ export interface SensorArgs {
   durationMs: number
   checkMs?: number[]
   skippedStop?: boolean
+  /** See `SensorLine.forced`'s doc comment: no current caller sets this. */
+  forced?: boolean
 }
 
 /**
@@ -62,13 +75,17 @@ export function buildSensorLine(info: HostInfo, clock: Clock, args: SensorArgs):
     // Required by the frozen consumer contract, but this kernel has no
     // marker/session-carryover mechanism at all (no SensorArgs field feeds
     // it) — always stamp the documented default-OFF value. DEFERRED: real
-    // marker tracking, and (D1, phase-0 scope) the pluginVersion/forced
-    // optionals, to a later milestone. See SensorLine.marker's doc comment.
+    // marker tracking. See SensorLine.marker's doc comment.
     marker: false,
+    // This kernel always knows its own version, unlike the frozen contract's
+    // general "producer may not know" case — so unlike checkMs/skippedStop/
+    // forced below, this is never conditional. See SensorLine.pluginVersion.
+    pluginVersion: KERNEL_VERSION,
   }
   // Additive fields last, so the leading columns of the NDJSON stay where a
   // human's eye expects them.
   if (args.checkMs) line.checkMs = [...args.checkMs]
   if (args.skippedStop) line.skippedStop = true
+  if (args.forced) line.forced = true
   return line
 }
