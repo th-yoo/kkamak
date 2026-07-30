@@ -305,10 +305,11 @@ test("recorded round times mean the state is not initial", () => {
 })
 
 test("a record written before checkMs existed is still valid, not corrupt", () => {
-  const { checkMs, ...legacy } = { ...INITIAL_STATE, edited: true, checkMs: [] }
+  const legacy: Record<string, unknown> = { ...INITIAL_STATE, edited: true }
+  delete legacy.checkMs
   expect(isGateState(legacy)).toBe(true)
-  expect(normalizeGateState(legacy as never).checkMs).toEqual([])
-  expect(normalizeGateState(legacy as never).edited).toBe(true)
+  expect(normalizeGateState(legacy as GateState).checkMs).toEqual([])
+  expect(normalizeGateState(legacy as GateState).edited).toBe(true)
 })
 
 test("a non-numeric checkMs is corrupt", () => {
@@ -336,7 +337,8 @@ test("round times survive a save/load round trip", () => {
 // A session in flight across an upgrade must not lose its armed state.
 test("a record written before checkMs existed loads as armed with no round times", () => {
   const store = new FileStateStore(dir)
-  const { checkMs, ...legacy } = { ...INITIAL_STATE, edited: true, checkMs: [] }
+  const legacy: Record<string, unknown> = { ...INITIAL_STATE, edited: true }
+  delete legacy.checkMs
   fs.mkdirSync(dir, { recursive: true })
   fs.writeFileSync(path.join(dir, `${recordName("s")}.json`), JSON.stringify(legacy))
 
@@ -1141,7 +1143,7 @@ describe("fail-open", () => {
       worktree: dir,
     })
     await hooks["tool.execute.after"]!({ tool: "write", sessionID: "s1", callID: "c1", args: {} }, { title: "", output: "", metadata: {} })
-    expect(
+    await expect(
       hooks.event!({ event: { type: "session.idle", properties: { sessionID: "s1" } } }),
     ).resolves.toBeUndefined()
   })
@@ -1157,7 +1159,7 @@ describe("fail-open", () => {
 
   test("a malformed event does not throw", async () => {
     const { hooks } = await plugin()
-    expect(hooks.event!({ event: {} as never })).resolves.toBeUndefined()
+    await expect(hooks.event!({ event: {} as never })).resolves.toBeUndefined()
   })
 })
 ```
