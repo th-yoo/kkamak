@@ -7,7 +7,7 @@
 // other.
 
 /** Result of one gate cycle round. */
-export type RoundOutcome = "passed" | "failed"
+export type RoundOutcome = "accepted" | "verify-failed"
 
 /** Per-session persisted state. One record per session id. */
 export interface GateState {
@@ -47,7 +47,7 @@ export interface GateConfig {
 /** One append-only sensor line, written once per completed gate cycle. */
 export interface SensorLine {
   ts: number
-  sessionId: string
+  sessionID: string
   check: string
   /** True whenever the stop was ultimately allowed through. */
   accepted: boolean
@@ -77,6 +77,18 @@ export interface SensorLine {
    * and no check ran. `rounds` is empty on such a line.
    */
   skippedStop?: boolean
+  /**
+   * Session-carryover marker flag, required by the frozen consumer contract
+   * (km-crank's SensorLine). The installed plugin's semantics: a marker
+   * records whether this cycle carried over a marker from a prior session,
+   * default OFF. This kernel has no marker/session-carryover mechanism at
+   * all yet, so `buildSensorLine` always stamps `false` here — see its doc
+   * comment. DEFERRED to a later milestone: implementing real marker
+   * tracking. Also deferred (D1, phase-0 scope): `pluginVersion` and
+   * `forced`, tolerated-absent optionals on the frozen contract that this
+   * kernel does not emit — packaging milestone, not phase 0.
+   */
+  marker: boolean
 }
 
 // ── Events in ───────────────────────────────────────────────────────────────
@@ -85,9 +97,9 @@ export interface SensorLine {
 // kernel never sees a tool name, a hook name, or a harness payload.
 
 export type GateEvent =
-  | { kind: "file-edited"; sessionId: string }
-  | { kind: "stop-requested"; sessionId: string }
-  | { kind: "new-user-prompt"; sessionId: string }
+  | { kind: "file-edited"; sessionID: string }
+  | { kind: "stop-requested"; sessionID: string }
+  | { kind: "new-user-prompt"; sessionID: string }
 
 // ── Decisions out ───────────────────────────────────────────────────────────
 
@@ -115,8 +127,8 @@ export interface CheckRunner {
 
 export interface StateStore {
   /** Never throws: absent, corrupt and wrong-shaped all read as initial state. */
-  load(sessionId: string): GateState
-  save(sessionId: string, state: GateState): void
+  load(sessionID: string): GateState
+  save(sessionID: string, state: GateState): void
 }
 
 export interface SensorSink {

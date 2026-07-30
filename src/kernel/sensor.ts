@@ -8,7 +8,7 @@ import type { Clock, HostInfo, RoundOutcome, SensorLine } from "./ports.ts"
  */
 export const SENSOR_FIELDS = [
   "ts",
-  "sessionId",
+  "sessionID",
   "check",
   "accepted",
   "gateExhausted",
@@ -17,6 +17,7 @@ export const SENSOR_FIELDS = [
   "durationMs",
   "host",
   "app",
+  "marker",
 ] as const satisfies readonly (keyof SensorLine)[]
 
 /**
@@ -29,7 +30,7 @@ export const OPTIONAL_SENSOR_FIELDS = [
 ] as const satisfies readonly (keyof SensorLine)[]
 
 export interface SensorArgs {
-  sessionId: string
+  sessionID: string
   check: string
   accepted: boolean
   gateExhausted: boolean
@@ -47,7 +48,7 @@ export interface SensorArgs {
 export function buildSensorLine(info: HostInfo, clock: Clock, args: SensorArgs): SensorLine {
   const line: SensorLine = {
     ts: clock.now(),
-    sessionId: args.sessionId,
+    sessionID: args.sessionID,
     check: args.check,
     accepted: args.accepted,
     gateExhausted: args.gateExhausted,
@@ -58,6 +59,12 @@ export function buildSensorLine(info: HostInfo, clock: Clock, args: SensorArgs):
     durationMs: args.durationMs,
     host: info.host,
     app: info.app,
+    // Required by the frozen consumer contract, but this kernel has no
+    // marker/session-carryover mechanism at all (no SensorArgs field feeds
+    // it) — always stamp the documented default-OFF value. DEFERRED: real
+    // marker tracking, and (D1, phase-0 scope) the pluginVersion/forced
+    // optionals, to a later milestone. See SensorLine.marker's doc comment.
+    marker: false,
   }
   // Additive fields last, so the leading columns of the NDJSON stay where a
   // human's eye expects them.

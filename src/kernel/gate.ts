@@ -45,29 +45,29 @@ async function handleEvent(host: GateHost, event: GateEvent): Promise<GateDecisi
   // impossible by construction rather than by discipline, which is what makes
   // editing or deleting the file an escape hatch that needs no restart.
   const config = parseGateConfig(host.config.read())
-  const state = host.state.load(event.sessionId)
+  const state = host.state.load(event.sessionID)
 
   if (state.disarmed) return ALLOW
 
   switch (event.kind) {
     case "file-edited":
-      return onFileEdited(host, event.sessionId, state, config)
+      return onFileEdited(host, event.sessionID, state, config)
     case "new-user-prompt":
-      return onNewUserPrompt(host, event.sessionId, state, config)
+      return onNewUserPrompt(host, event.sessionID, state, config)
     case "stop-requested":
-      return onStopRequested(host, event.sessionId, state, config)
+      return onStopRequested(host, event.sessionID, state, config)
   }
 }
 
 /** Arming. A repo with no usable gate.json accumulates no state at all. */
 function onFileEdited(
   host: GateHost,
-  sessionId: string,
+  sessionID: string,
   state: GateState,
   config: GateConfig | undefined,
 ): GateDecision {
   if (!config || state.edited) return ALLOW
-  persist(host, sessionId, { ...state, edited: true })
+  persist(host, sessionID, { ...state, edited: true })
   return ALLOW
 }
 
@@ -78,7 +78,7 @@ function onFileEdited(
  */
 function onNewUserPrompt(
   host: GateHost,
-  sessionId: string,
+  sessionID: string,
   state: GateState,
   config: GateConfig | undefined,
 ): GateDecision {
@@ -90,7 +90,7 @@ function onNewUserPrompt(
     // cumulatively.
     if (config && state.edited) {
       record(host, config.sensor, {
-        sessionId,
+        sessionID,
         check: config.check,
         accepted: true,
         gateExhausted: false,
@@ -106,7 +106,7 @@ function onNewUserPrompt(
 
   if (config) {
     record(host, config.sensor, {
-      sessionId,
+      sessionID,
       check: config.check,
       accepted: true,
       gateExhausted: true,
@@ -117,13 +117,13 @@ function onNewUserPrompt(
     })
   }
 
-  persist(host, sessionId, { ...INITIAL_STATE })
+  persist(host, sessionID, { ...INITIAL_STATE })
   return ALLOW
 }
 
 async function onStopRequested(
   host: GateHost,
-  sessionId: string,
+  sessionID: string,
   state: GateState,
   config: GateConfig | undefined,
 ): Promise<GateDecision> {
@@ -134,7 +134,7 @@ async function onStopRequested(
     // The config vanished or broke mid-cycle. Abandon the cycle but keep
     // `edited` — the user's edit is unrelated to the config's disappearance, so
     // restoring gate.json should re-gate without needing a fresh edit.
-    if (state.gating) persist(host, sessionId, { ...INITIAL_STATE, edited: state.edited })
+    if (state.gating) persist(host, sessionID, { ...INITIAL_STATE, edited: state.edited })
     return ALLOW
   }
 
@@ -148,7 +148,7 @@ async function onStopRequested(
       throw new Error(`check runner returned a malformed result: ${JSON.stringify(result)}`)
     }
   } catch (err) {
-    return onInternalError(host, sessionId, state, err)
+    return onInternalError(host, sessionID, state, err)
   }
 
   // Measured around the runner only. `durationMs` spans the whole cycle and so
@@ -156,12 +156,12 @@ async function onStopRequested(
   // be a 1s check, and the two numbers answer different questions.
   const checkMs = [...state.checkMs, host.clock.now() - checkStartedAt]
 
-  const outcome: RoundOutcome = result.code === 0 ? "passed" : "failed"
+  const outcome: RoundOutcome = result.code === 0 ? "accepted" : "verify-failed"
   const outcomes = [...state.outcomes, outcome]
 
-  if (outcome === "passed") {
+  if (outcome === "accepted") {
     record(host, config.sensor, {
-      sessionId,
+      sessionID,
       check: config.check,
       accepted: true,
       gateExhausted: false,
@@ -170,14 +170,14 @@ async function onStopRequested(
       checkMs,
       durationMs: elapsed(host, startedAt),
     })
-    persist(host, sessionId, { ...INITIAL_STATE })
+    persist(host, sessionID, { ...INITIAL_STATE })
     return ALLOW
   }
 
   // rounds is a budget of blocks: `rounds + 1` failing checks ends the cycle.
   if (state.round < config.rounds) {
     const round = state.round + 1
-    const recorded = persist(host, sessionId, {
+    const recorded = persist(host, sessionID, {
       ...state,
       gating: true,
       round,
@@ -205,7 +205,7 @@ async function onStopRequested(
 
   const attempts = config.rounds + 1
   record(host, config.sensor, {
-    sessionId,
+    sessionID,
     check: config.check,
     accepted: true,
     gateExhausted: true,
@@ -214,7 +214,7 @@ async function onStopRequested(
     checkMs,
     durationMs: elapsed(host, startedAt),
   })
-  persist(host, sessionId, { ...INITIAL_STATE })
+  persist(host, sessionID, { ...INITIAL_STATE })
   return {
     kind: "allow",
     notice:
@@ -231,7 +231,7 @@ async function onStopRequested(
  */
 function onInternalError(
   host: GateHost,
-  sessionId: string,
+  sessionID: string,
   state: GateState,
   err: unknown,
 ): GateDecision {
@@ -239,7 +239,7 @@ function onInternalError(
   const errorStreak = state.errorStreak + 1
 
   if (errorStreak >= ERROR_STREAK_LIMIT) {
-    persist(host, sessionId, { ...INITIAL_STATE, errorStreak, disarmed: true })
+    persist(host, sessionID, { ...INITIAL_STATE, errorStreak, disarmed: true })
     return {
       kind: "allow",
       notice:
@@ -248,7 +248,7 @@ function onInternalError(
     }
   }
 
-  return withPersist(host, sessionId, { ...state, errorStreak }, ALLOW)
+  return withPersist(host, sessionID, { ...state, errorStreak }, ALLOW)
 }
 
 // ── Effect helpers: each contains its own failure ────────────────────────────
@@ -268,23 +268,23 @@ function elapsed(host: GateHost, startedAt: number): number {
  * decision already do not care; the block branch does, because a block it
  * cannot record is a block it cannot bound.
  */
-function persist(host: GateHost, sessionId: string, state: GateState): boolean {
+function persist(host: GateHost, sessionID: string, state: GateState): boolean {
   try {
-    host.state.save(sessionId, state)
+    host.state.save(sessionID, state)
     return true
   } catch (err) {
-    note(host, `could not persist state for ${sessionId}: ${describe(err)}`)
+    note(host, `could not persist state for ${sessionID}: ${describe(err)}`)
     return false
   }
 }
 
 function withPersist(
   host: GateHost,
-  sessionId: string,
+  sessionID: string,
   state: GateState,
   decision: GateDecision,
 ): GateDecision {
-  persist(host, sessionId, state)
+  persist(host, sessionID, state)
   return decision
 }
 

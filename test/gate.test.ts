@@ -4,9 +4,9 @@ import { INITIAL_STATE } from "../src/kernel/state.ts"
 import { FAIL, FakeClock, makeHarness, PASS } from "./fakes.ts"
 
 const SESSION = "sess-1"
-const edit = { kind: "file-edited", sessionId: SESSION } as const
-const stop = { kind: "stop-requested", sessionId: SESSION } as const
-const prompt = { kind: "new-user-prompt", sessionId: SESSION } as const
+const edit = { kind: "file-edited", sessionID: SESSION } as const
+const stop = { kind: "stop-requested", sessionID: SESSION } as const
+const prompt = { kind: "new-user-prompt", sessionID: SESSION } as const
 
 describe("arming", () => {
   test("an unedited session stops freely and never runs the check", async () => {
@@ -35,8 +35,8 @@ describe("arming", () => {
   test("sessions are independent", async () => {
     const h = makeHarness({ fallback: PASS })
     const gate = createGate(h.host)
-    await gate.handle({ kind: "file-edited", sessionId: "a" })
-    expect(await gate.handle({ kind: "stop-requested", sessionId: "b" })).toEqual({ kind: "allow" })
+    await gate.handle({ kind: "file-edited", sessionID: "a" })
+    expect(await gate.handle({ kind: "stop-requested", sessionID: "b" })).toEqual({ kind: "allow" })
     expect(h.check.calls).toHaveLength(0)
   })
 })
@@ -50,12 +50,12 @@ describe("passing check", () => {
 
     expect(h.sensor.lines).toHaveLength(1)
     expect(h.sensor.lines[0]).toMatchObject({
-      sessionId: SESSION,
+      sessionID: SESSION,
       check: "bun test",
       accepted: true,
       gateExhausted: false,
       interrupted: false,
-      rounds: ["passed"],
+      rounds: ["accepted"],
       app: "test-app",
       host: "test-host",
     })
@@ -116,7 +116,7 @@ describe("failing check", () => {
     const s = h.store.peek(SESSION)!
     expect(s.gating).toBe(true)
     expect(s.round).toBe(1)
-    expect(s.outcomes).toEqual(["failed"])
+    expect(s.outcomes).toEqual(["verify-failed"])
   })
 
   // rounds:2 means two blocks, then the third failure gives up.
@@ -138,7 +138,7 @@ describe("failing check", () => {
       accepted: true,
       gateExhausted: true,
       interrupted: false,
-      rounds: ["failed", "failed", "failed"],
+      rounds: ["verify-failed", "verify-failed", "verify-failed"],
     })
   })
 
@@ -151,7 +151,7 @@ describe("failing check", () => {
     expect(h.sensor.lines[0]).toMatchObject({
       accepted: true,
       gateExhausted: false,
-      rounds: ["failed", "passed"],
+      rounds: ["verify-failed", "accepted"],
     })
   })
 
@@ -172,7 +172,7 @@ describe("failing check", () => {
     await gate.handle(edit)
     const d = await gate.handle(stop)
     expect(d.kind).toBe("allow")
-    expect(h.sensor.lines[0]).toMatchObject({ gateExhausted: true, rounds: ["failed"] })
+    expect(h.sensor.lines[0]).toMatchObject({ gateExhausted: true, rounds: ["verify-failed"] })
   })
 
   test("measures duration across the whole cycle, not the last round", async () => {
@@ -253,7 +253,7 @@ describe("a new user prompt preempts the gate", () => {
       accepted: true,
       gateExhausted: true,
       interrupted: true,
-      rounds: ["failed"],
+      rounds: ["verify-failed"],
     })
 
     // Fully stood down: edited is cleared too, so the next stop is free.
@@ -542,7 +542,7 @@ describe("a skipped stop boundary is visible", () => {
 
     expect(h.sensor.lines).toHaveLength(1)
     expect(h.sensor.lines[0]).toMatchObject({
-      sessionId: SESSION,
+      sessionID: SESSION,
       check: "bun test",
       skippedStop: true,
       rounds: [],
@@ -581,7 +581,7 @@ describe("a skipped stop boundary is visible", () => {
     expect(h.sensor.lines).toHaveLength(1)
     expect(h.sensor.lines[0]?.interrupted).toBe(true)
     expect(h.sensor.lines[0]?.skippedStop).toBeUndefined()
-    expect(h.sensor.lines[0]?.rounds).toEqual(["failed"])
+    expect(h.sensor.lines[0]?.rounds).toEqual(["verify-failed"])
   })
 
   test("no config means no sensor path, so nothing is recorded", async () => {
@@ -625,7 +625,7 @@ describe("per-round check timing", () => {
     await gate.handle(stop)
 
     const line = h.sensor.lines[0]!
-    expect(line.rounds).toEqual(["failed", "passed"])
+    expect(line.rounds).toEqual(["verify-failed", "accepted"])
     expect(line.checkMs).toHaveLength(2)
     expect(line.checkMs?.every((ms) => typeof ms === "number" && ms >= 0)).toBe(true)
   })

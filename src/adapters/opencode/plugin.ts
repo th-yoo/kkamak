@@ -84,23 +84,23 @@ export async function createKkamakPlugin(deps: PluginDeps): Promise<KkamakHooks>
     "tool.execute.after": (input) =>
       guarded("tool.execute.after", log, async () => {
         if (!EDIT_TOOLS.includes(input.tool.toLowerCase())) return
-        await gate.handle({ kind: "file-edited", sessionId: input.sessionID })
+        await gate.handle({ kind: "file-edited", sessionID: input.sessionID })
       }),
 
     "chat.message": (input, output) =>
       guarded("chat.message", log, async () => {
         // Our own continuation prompt must not preempt the cycle it opened.
         if (isInjectedMessage(textOf(output.parts))) return
-        await gate.handle({ kind: "new-user-prompt", sessionId: input.sessionID })
+        await gate.handle({ kind: "new-user-prompt", sessionID: input.sessionID })
       }),
 
     event: ({ event }) =>
       guarded("session.idle", log, async () => {
         if (event?.type !== "session.idle") return
-        const sessionId = event.properties?.sessionID
-        if (typeof sessionId !== "string" || !sessionId) return
+        const sessionID = event.properties?.sessionID
+        if (typeof sessionID !== "string" || !sessionID) return
 
-        const decision = await gate.handle({ kind: "stop-requested", sessionId })
+        const decision = await gate.handle({ kind: "stop-requested", sessionID })
         if (decision.kind !== "block") {
           if (decision.notice) log(`kkamak: ${decision.notice}\n`)
           return
@@ -111,7 +111,7 @@ export async function createKkamakPlugin(deps: PluginDeps): Promise<KkamakHooks>
         ]
         // promptAsync, not prompt: prompt waits for the assistant to finish and
         // we are inside an event handler, which would deadlock.
-        await deps.client.session.promptAsync({ path: { id: sessionId }, body: { parts } })
+        await deps.client.session.promptAsync({ path: { id: sessionID }, body: { parts } })
       }),
   }
 }

@@ -32,6 +32,47 @@ the day's sensor numbers, and mechanism observations the sensor stream
 cannot see (behavioral shifts, qualitative saves, instrument anomalies).
 This file is proposer evidence — keep entries factual and dated.
 
+## 2026-07-30 — sensor contract conformance fix (phase 0, meta-harness §4.3 build)
+
+Fixes the drift flagged by the MacBook setup review finding below, plus two
+more found while landing it (ratified plan: meta-harness
+`docs/superpowers/plans/2026-07-30-phase0-contract-events.md`).
+
+- **`sessionId` → `sessionID`** (exact casing) renamed across the whole
+  emission path: `SensorLine`/`SensorArgs`/`GateEvent`/`StateStore` in
+  `src/kernel/ports.ts`, `src/kernel/sensor.ts`, `src/kernel/gate.ts`, both
+  harness adapters (`hook-input.ts`, `opencode/plugin.ts`),
+  `file-state-store.ts`, and every test site. `session_id` (Claude Code's
+  own hook JSON field name) is untouched — only kkamak's internal field.
+- **`marker: boolean` added**, required by the consumer's parser. This
+  kernel has no marker/session-carryover mechanism, so `buildSensorLine`
+  always stamps `marker:false`, documented in `SensorLine.marker`'s and
+  `buildSensorLine`'s doc comments as a standing deferral, not an oversight.
+- **`rounds` vocabulary aligned**: `RoundOutcome` was `"passed"|"failed"`,
+  the frozen contract wants `"accepted"|"verify-failed"` — renamed the type
+  and every emit/persist/test site (this also changes the on-disk
+  `GateState.outcomes` vocabulary; no back-compat shim, since it's
+  session-transient host-local state, not a shared artifact). README's
+  sensor-file example and field docs updated to match.
+- **D1 deferral (explicit, not silent)**: `pluginVersion`/`forced` — two
+  tolerated-absent optionals on the frozen contract — are ratified as OUT
+  OF SCOPE for phase 0; porting them is deferred to a packaging milestone.
+  The new conformance test (`test/sensor-contract.test.ts`) asserts their
+  absence from every kernel-emitted line, so a future accidental partial
+  port gets caught rather than silently drifting further from the vector
+  shapes.
+- **Golden vectors**: `test/fixtures/sensor-contract.ndjson` — the 4
+  canonical vector lines, copied byte-for-byte (D2) from meta-harness
+  `km-crank/test/sensor-contract.test.ts`'s embedded `VECTOR_LINES`. Byte
+  parity verified both directions: locally against a reconstruction of the
+  meta-harness source, and by running that repo's own advisory parity test
+  (`bun test test/sensor-contract.test.ts` there — 5/5 pass, parity no
+  longer skipped now that this file exists).
+- Suite: 260 → 268 (8 new: 1 marker-stamping test, 7 in the new
+  `test/sensor-contract.test.ts` covering a driven-kernel conformance check
+  for all 4 canonical shapes plus fixture sanity). `bunx tsc --noEmit`
+  clean.
+
 ## 2026-07-30 — MacBook setup review finding: sensor contract divergence (yoo-mac.local)
 
 - No sensor numbers — MacBook stream empty at entry time (repo freshly

@@ -1,0 +1,222 @@
+// sensor-contract.test.ts — Phase 0 Task 1 (2026-07-30 phase0-contract-events
+// plan, ~/z2/meta-harness). Guards the drift that made this kernel's
+// emitted sensor lines invisible to km-crank: sessionId (wrong casing), no
+// marker field, and a "passed"/"failed" rounds vocabulary the consumer's
+// parser does not recognise (it expects "verify-failed"/"accepted").
+//
+// Counterpart (byte-parity checked against the fixture below): the frozen
+// vector lines are authored in meta-harness's
+// km-crank/test/sensor-contract.test.ts (embedded VECTOR_LINES there). D2
+// (ratified in meta-harness docs/superpowers/plans/2026-07-30-phase0-contract-events.md):
+// this file's counterpart, test/fixtures/sensor-contract.ndjson, is the
+// canonical/publishable copy, authored by copying those four lines
+// byte-for-byte. IMPORTANT: that .ndjson file intentionally carries NO
+// header comment of its own — the meta-harness parity test does a raw
+// string compare (`VECTOR_LINES.join("\n") + "\n"` against the file's exact
+// bytes, no comment-stripping), so a comment line inside the fixture would
+// break the one thing D2 requires it to get exactly right. This header
+// comment lives here instead, attached to the fixture from the outside.
+//
+// Required field truth (from the frozen contract, cross-checked against the
+// vector lines): ts, sessionID, check, accepted, gateExhausted, interrupted,
+// rounds, durationMs, host, app, marker. Optional and tolerated-absent:
+// checkMs, pluginVersion, forced, skippedStop. D1 (ratified): pluginVersion
+// and forced are explicitly DEFERRED to a packaging milestone — this
+// kernel must not emit them yet, so this file also asserts their absence.
+
+import { describe, expect, test } from "bun:test"
+import { existsSync, readFileSync } from "node:fs"
+import path from "node:path"
+import { createGate } from "../src/kernel/gate.ts"
+import type { RoundOutcome } from "../src/kernel/ports.ts"
+import { FAIL, FakeClock, makeHarness, PASS } from "./fakes.ts"
+
+const REQUIRED_FIELDS = [
+  "ts",
+  "sessionID",
+  "check",
+  "accepted",
+  "gateExhausted",
+  "interrupted",
+  "rounds",
+  "durationMs",
+  "host",
+  "app",
+  "marker",
+] as const
+
+const ROUND_VOCAB: readonly RoundOutcome[] = ["verify-failed", "accepted"]
+
+/**
+ * Schema-level conformance: required fields present with the right types and
+ * casing, rounds drawn from the frozen vocabulary, and the D1-deferred
+ * optionals absent. This is NOT a byte-compare against the golden vectors —
+ * a driven kernel run has its own timestamps/session ids/host info, so it
+ * cannot equal the static fixture. It proves the same *shape* the vectors
+ * assert.
+ */
+function assertConformsToSensorContract(line: Record<string, unknown>): void {
+  for (const field of REQUIRED_FIELDS) {
+    expect(line).toHaveProperty(field)
+  }
+
+  expect(typeof line.ts).toBe("number")
+  expect(typeof line.sessionID).toBe("string")
+  expect(typeof line.check).toBe("string")
+  expect(typeof line.accepted).toBe("boolean")
+  expect(typeof line.gateExhausted).toBe("boolean")
+  expect(typeof line.interrupted).toBe("boolean")
+  expect(typeof line.durationMs).toBe("number")
+  expect(typeof line.host).toBe("string")
+  expect(typeof line.app).toBe("string")
+  expect(typeof line.marker).toBe("boolean")
+
+  expect(Array.isArray(line.rounds)).toBe(true)
+  for (const round of line.rounds as unknown[]) {
+    expect(ROUND_VOCAB).toContain(round as RoundOutcome)
+  }
+
+  // The exact drift this whole file guards: the old casing must never
+  // reappear alongside the correct field.
+  expect(line).not.toHaveProperty("sessionId")
+
+  if ("checkMs" in line) {
+    expect(Array.isArray(line.checkMs)).toBe(true)
+  }
+  if ("skippedStop" in line) {
+    expect(typeof line.skippedStop).toBe("boolean")
+  }
+
+  // D1 (ratified): pluginVersion/forced porting is deferred to the packaging
+  // milestone — this kernel's emission path must not add them yet.
+  expect(line).not.toHaveProperty("pluginVersion")
+  expect(line).not.toHaveProperty("forced")
+}
+
+describe("sensor contract: driven-kernel emission conforms to the frozen SensorLine", () => {
+  // 1. Clean accept: single round, no failures — mirrors the vectors' CLEAN_ACCEPT shape.
+  test("clean accept", async () => {
+    const h = makeHarness({ script: [PASS], clock: new FakeClock(1_000, 500) })
+    const gate = createGate(h.host)
+    await gate.handle({ kind: "file-edited", sessionID: "sess-clean" })
+    const decision = await gate.handle({ kind: "stop-requested", sessionID: "sess-clean" })
+
+    expect(decision).toEqual({ kind: "allow" })
+    expect(h.sensor.lines).toHaveLength(1)
+    const line = h.sensor.lines[0]! as unknown as Record<string, unknown>
+    assertConformsToSensorContract(line)
+    expect(line.rounds).toEqual(["accepted"])
+    expect(line.accepted).toBe(true)
+    expect(line.gateExhausted).toBe(false)
+  })
+
+  // 2. Catch: a block round then a fix — mirrors CATCH_BLOCK_THEN_FIX.
+  test("catch: block then fix", async () => {
+    const h = makeHarness({ script: [FAIL, PASS], clock: new FakeClock(1_000, 500) })
+    const gate = createGate(h.host)
+    await gate.handle({ kind: "file-edited", sessionID: "sess-catch" })
+    await gate.handle({ kind: "stop-requested", sessionID: "sess-catch" }) // blocks
+    const decision = await gate.handle({ kind: "stop-requested", sessionID: "sess-catch" })
+
+    expect(decision).toEqual({ kind: "allow" })
+    expect(h.sensor.lines).toHaveLength(1)
+    const line = h.sensor.lines[0]! as unknown as Record<string, unknown>
+    assertConformsToSensorContract(line)
+    expect(line.rounds).toEqual(["verify-failed", "accepted"])
+  })
+
+  // 3. Exhausted: rounds budget spent — mirrors EXHAUSTED.
+  test("exhausted", async () => {
+    const h = makeHarness({ fallback: FAIL, clock: new FakeClock(1_000, 500) })
+    const gate = createGate(h.host)
+    await gate.handle({ kind: "file-edited", sessionID: "sess-exhausted" })
+    await gate.handle({ kind: "stop-requested", sessionID: "sess-exhausted" }) // block 1
+    await gate.handle({ kind: "stop-requested", sessionID: "sess-exhausted" }) // block 2
+    const decision = await gate.handle({ kind: "stop-requested", sessionID: "sess-exhausted" }) // exhausted
+
+    expect(decision.kind).toBe("allow")
+    expect(h.sensor.lines).toHaveLength(1)
+    const line = h.sensor.lines[0]! as unknown as Record<string, unknown>
+    assertConformsToSensorContract(line)
+    expect(line.gateExhausted).toBe(true)
+    expect(line.rounds).toEqual(["verify-failed", "verify-failed", "verify-failed"])
+    // stop.ts's rule on the frozen contract's side: marker must never fire on
+    // exhaustion. This kernel always stamps marker:false (no mechanism yet),
+    // so it already satisfies that rule trivially.
+    expect(line.marker).toBe(false)
+  })
+
+  // 4. skippedStop-shaped diagnostic — mirrors SKIPPED_STOP_DIAGNOSTIC.
+  test("skippedStop diagnostic", async () => {
+    const h = makeHarness({ fallback: FAIL, clock: new FakeClock(1_000, 500) })
+    const gate = createGate(h.host)
+    await gate.handle({ kind: "file-edited", sessionID: "sess-skipped" })
+    const decision = await gate.handle({ kind: "new-user-prompt", sessionID: "sess-skipped" })
+
+    expect(decision).toEqual({ kind: "allow" })
+    expect(h.sensor.lines).toHaveLength(1)
+    const line = h.sensor.lines[0]! as unknown as Record<string, unknown>
+    assertConformsToSensorContract(line)
+    expect(line.skippedStop).toBe(true)
+    expect(line.rounds).toEqual([])
+    expect(line.durationMs).toBe(0)
+  })
+})
+
+describe("sensor contract: golden vector fixture", () => {
+  const FIXTURE = path.join(import.meta.dir, "fixtures", "sensor-contract.ndjson")
+
+  test("fixture file exists", () => {
+    expect(existsSync(FIXTURE)).toBe(true)
+  })
+
+  test("every fixture line is well-formed JSON conforming to the required-field schema", () => {
+    const text = readFileSync(FIXTURE, "utf-8")
+    const lines = text.split("\n").filter((l) => l.length > 0)
+    expect(lines).toHaveLength(4)
+    for (const raw of lines) {
+      const parsed = JSON.parse(raw) as Record<string, unknown>
+      for (const field of REQUIRED_FIELDS) {
+        expect(parsed).toHaveProperty(field)
+      }
+      expect(Array.isArray(parsed.rounds)).toBe(true)
+      for (const round of parsed.rounds as unknown[]) {
+        expect(ROUND_VOCAB).toContain(round as RoundOutcome)
+      }
+    }
+  })
+
+  // Advisory, mirroring the check meta-harness's own parity test does in the
+  // other direction (D2). Not authoritative here — the meta-harness test is
+  // — but a local guard is cheap and fails loudly on the same drift.
+  test("fixture byte-matches the meta-harness counterpart when present", () => {
+    const counterpart = path.join(
+      import.meta.dir,
+      "..",
+      "..",
+      "meta-harness",
+      "km-crank",
+      "test",
+      "sensor-contract.test.ts",
+    )
+    if (!existsSync(counterpart)) {
+      console.log(`[sensor-contract] advisory check SKIPPED: ${counterpart} not found. Not a failure.`)
+      return
+    }
+    const src = readFileSync(counterpart, "utf-8")
+    const names = ["CLEAN_ACCEPT", "CATCH_BLOCK_THEN_FIX", "EXHAUSTED", "SKIPPED_STOP_DIAGNOSTIC"]
+    const lines: string[] = []
+    for (const name of names) {
+      const re = new RegExp(`${name}\\s*=\\s*\\n?\\s*'([^']*)'`)
+      const m = src.match(re)
+      if (!m) {
+        console.log(`[sensor-contract] advisory check SKIPPED: could not locate ${name} in ${counterpart}.`)
+        return
+      }
+      lines.push(m[1]!)
+    }
+    const theirs = lines.join("\n") + "\n"
+    const ours = readFileSync(FIXTURE, "utf-8")
+    expect(ours).toBe(theirs)
+  })
+})

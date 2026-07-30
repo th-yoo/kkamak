@@ -13,7 +13,7 @@ export const INITIAL_STATE: GateState = {
   updatedAt: 0,
 }
 
-const OUTCOMES: readonly string[] = ["passed", "failed"] satisfies RoundOutcome[]
+const OUTCOMES: readonly string[] = ["accepted", "verify-failed"] satisfies RoundOutcome[]
 
 /**
  * Initial-equivalence ignores updatedAt, so a store can treat "saved initial

@@ -106,13 +106,13 @@ describe("FileStateStore", () => {
 
   test("round-trips a saved state", () => {
     const s = store()
-    const saved: GateState = { ...INITIAL_STATE, edited: true, gating: true, round: 2, outcomes: ["failed", "failed"] }
+    const saved: GateState = { ...INITIAL_STATE, edited: true, gating: true, round: 2, outcomes: ["verify-failed", "verify-failed"] }
     s.save("sess-1", saved)
     expect(s.load("sess-1")).toMatchObject({
       edited: true,
       gating: true,
       round: 2,
-      outcomes: ["failed", "failed"],
+      outcomes: ["verify-failed", "verify-failed"],
     })
   })
 
@@ -184,7 +184,7 @@ describe("FileStateStore", () => {
 
   test("round times survive a save/load round trip", () => {
     const store = new FileStateStore(dir)
-    store.save("s", { ...INITIAL_STATE, edited: true, gating: true, round: 1, outcomes: ["failed"], checkMs: [1_234] })
+    store.save("s", { ...INITIAL_STATE, edited: true, gating: true, round: 1, outcomes: ["verify-failed"], checkMs: [1_234] })
     expect(store.load("s").checkMs).toEqual([1_234])
   })
 
@@ -205,15 +205,16 @@ describe("FileStateStore", () => {
 describe("NdjsonSensorSink", () => {
   const line = (over: Partial<SensorLine> = {}): SensorLine => ({
     ts: 1,
-    sessionId: "s",
+    sessionID: "s",
     check: "bun test",
     accepted: true,
     gateExhausted: false,
     interrupted: false,
-    rounds: ["passed"],
+    rounds: ["accepted"],
     durationMs: 1,
     host: "h",
     app: "a",
+    marker: false,
     ...over,
   })
 

@@ -8,7 +8,7 @@ const payload = (over: Record<string, unknown> = {}) =>
 describe("parseHookInput", () => {
   test("maps Stop to stop-requested", () => {
     const parsed = parseHookInput(payload(), "Stop")
-    expect(parsed).toEqual({ event: { kind: "stop-requested", sessionId: "s-1" }, root: "/repo" })
+    expect(parsed).toEqual({ event: { kind: "stop-requested", sessionID: "s-1" }, root: "/repo" })
   })
 
   test("maps UserPromptSubmit to new-user-prompt", () => {

@@ -33,21 +33,21 @@ export function parseHookInput(raw: string, eventName: string): ParsedHookInput 
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined
 
   const record = parsed as Record<string, unknown>
-  const sessionId = record.session_id
+  const sessionID = record.session_id
   const root = record.cwd
-  if (typeof sessionId !== "string" || !sessionId) return undefined
+  if (typeof sessionID !== "string" || !sessionID) return undefined
   if (typeof root !== "string" || !root) return undefined
 
   switch (eventName) {
     case "Stop":
-      return { event: { kind: "stop-requested", sessionId }, root }
+      return { event: { kind: "stop-requested", sessionID }, root }
     case "UserPromptSubmit":
-      return { event: { kind: "new-user-prompt", sessionId }, root }
+      return { event: { kind: "new-user-prompt", sessionID }, root }
     case "PostToolUse": {
       const tool = record.tool_name
       if (typeof tool !== "string") return undefined
       if (!EDIT_TOOLS.includes(tool)) return undefined
-      return { event: { kind: "file-edited", sessionId }, root }
+      return { event: { kind: "file-edited", sessionID }, root }
     }
     default:
       return undefined

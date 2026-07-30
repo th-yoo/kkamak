@@ -6,12 +6,12 @@ const info: HostInfo = { app: "opencode", host: "test-host" }
 const clock = { now: () => 1_700_000_000_000 }
 
 const base = {
-  sessionId: "sess-1",
+  sessionID: "sess-1",
   check: "bun test",
   accepted: true,
   gateExhausted: false,
   interrupted: false,
-  rounds: ["passed"] as const,
+  rounds: ["accepted"] as const,
   durationMs: 4200,
 }
 
@@ -21,7 +21,7 @@ describe("buildSensorLine", () => {
     expect(Object.keys(line).sort()).toEqual([...SENSOR_FIELDS].sort())
   })
 
-  test("declares the ten agreed fields", () => {
+  test("declares the eleven agreed fields", () => {
     expect([...SENSOR_FIELDS].sort()).toEqual([
       "accepted",
       "app",
@@ -30,10 +30,19 @@ describe("buildSensorLine", () => {
       "gateExhausted",
       "host",
       "interrupted",
+      "marker",
       "rounds",
-      "sessionId",
+      "sessionID",
       "ts",
     ])
+  })
+
+  // The consumer's frozen contract requires `marker` on every line. This
+  // kernel has no marker mechanism (no session-carryover concept) — see
+  // sensor.ts's doc comment on the field for the deferral this stands in for.
+  test("stamps marker false, since this kernel has no marker mechanism yet", () => {
+    const line = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds] })
+    expect(line.marker).toBe(false)
   })
 
   test("stamps ts from the clock", () => {
@@ -61,35 +70,35 @@ describe("buildSensorLine", () => {
 
   test("threads every argument verbatim", () => {
     const args = {
-      sessionId: "my-session",
+      sessionID: "my-session",
       check: "npm run check",
       accepted: false,
       gateExhausted: true,
       interrupted: true,
-      rounds: ["failed", "failed"] as const,
+      rounds: ["verify-failed", "verify-failed"] as const,
       durationMs: 90_000,
     }
     const line = buildSensorLine(info, clock, { ...args, rounds: [...args.rounds] })
-    expect(line.sessionId).toBe(args.sessionId)
+    expect(line.sessionID).toBe(args.sessionID)
     expect(line.check).toBe(args.check)
     expect(line.accepted).toBe(false)
     expect(line.gateExhausted).toBe(true)
     expect(line.interrupted).toBe(true)
-    expect(line.rounds).toEqual(["failed", "failed"])
+    expect(line.rounds).toEqual(["verify-failed", "verify-failed"])
     expect(line.durationMs).toBe(90_000)
   })
 
   test("copies rounds so later mutation of the state array cannot rewrite history", () => {
-    const rounds = ["failed"] as ("passed" | "failed")[]
+    const rounds = ["verify-failed"] as ("accepted" | "verify-failed")[]
     const line = buildSensorLine(info, clock, { ...base, rounds })
-    rounds.push("passed")
-    expect(line.rounds).toEqual(["failed"])
+    rounds.push("accepted")
+    expect(line.rounds).toEqual(["verify-failed"])
   })
 
   test("survives a JSON round trip unchanged — it is written as NDJSON", () => {
     const line = buildSensorLine(info, clock, {
       ...base,
-      rounds: ["failed", "passed"],
+      rounds: ["verify-failed", "accepted"],
       accepted: true,
       gateExhausted: true,
     })
@@ -124,7 +133,7 @@ describe("additive fields", () => {
   test("carries per-round check times parallel to rounds", () => {
     const line = buildSensorLine(info, clock, {
       ...base,
-      rounds: ["failed", "passed"],
+      rounds: ["verify-failed", "accepted"],
       checkMs: [1_200, 900],
     })
     expect(line.checkMs).toEqual([1_200, 900])

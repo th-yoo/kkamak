@@ -30,7 +30,7 @@ describe("INITIAL_STATE", () => {
     ["edited", { edited: true }],
     ["gating", { gating: true }],
     ["round", { round: 1 }],
-    ["outcomes", { outcomes: ["failed" as const] }],
+    ["outcomes", { outcomes: ["verify-failed" as const] }],
     ["cycleStartedAt", { cycleStartedAt: 5 }],
     ["errorStreak", { errorStreak: 1 }],
     ["disarmed", { disarmed: true }],
@@ -50,7 +50,7 @@ describe("isGateState", () => {
       edited: true,
       gating: true,
       round: 2,
-      outcomes: ["failed", "failed"],
+      outcomes: ["verify-failed", "verify-failed"],
       cycleStartedAt: 100,
     }
     expect(isGateState(s)).toBe(true)
@@ -68,7 +68,7 @@ describe("isGateState", () => {
     ["a missing field", { v: 1, edited: false }],
     ["a wrong-typed boolean", { ...INITIAL_STATE, edited: "yes" }],
     ["a wrong-typed number", { ...INITIAL_STATE, round: "1" }],
-    ["a non-array outcomes", { ...INITIAL_STATE, outcomes: "failed" }],
+    ["a non-array outcomes", { ...INITIAL_STATE, outcomes: "verify-failed" }],
     ["an unknown outcome string", { ...INITIAL_STATE, outcomes: ["exploded"] }],
     ["a non-string outcome", { ...INITIAL_STATE, outcomes: [1] }],
     ["a missing disarmed flag", { ...INITIAL_STATE, disarmed: undefined }],
@@ -100,7 +100,7 @@ test("a non-numeric checkMs is corrupt", () => {
 })
 
 test("normalising copies the arrays, so a loaded record cannot alias state", () => {
-  const source = { ...INITIAL_STATE, outcomes: ["failed" as const], checkMs: [7] }
+  const source = { ...INITIAL_STATE, outcomes: ["verify-failed" as const], checkMs: [7] }
   const copy = normalizeGateState(source)
   expect(copy.outcomes).not.toBe(source.outcomes)
   expect(copy.checkMs).not.toBe(source.checkMs)

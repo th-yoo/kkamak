@@ -40,21 +40,21 @@ export class FakeConfig {
 }
 
 export class FakeStore {
-  readonly saves: { sessionId: string; state: GateState }[] = []
+  readonly saves: { sessionID: string; state: GateState }[] = []
   private records = new Map<string, GateState>()
 
-  load(sessionId: string): GateState {
-    return { ...(this.records.get(sessionId) ?? INITIAL_STATE) }
+  load(sessionID: string): GateState {
+    return { ...(this.records.get(sessionID) ?? INITIAL_STATE) }
   }
 
-  save(sessionId: string, state: GateState): void {
-    this.records.set(sessionId, { ...state })
-    this.saves.push({ sessionId, state: { ...state } })
+  save(sessionID: string, state: GateState): void {
+    this.records.set(sessionID, { ...state })
+    this.saves.push({ sessionID, state: { ...state } })
   }
 
   /** Test-only peek that does not go through load()'s copying. */
-  peek(sessionId: string): GateState | undefined {
-    return this.records.get(sessionId)
+  peek(sessionID: string): GateState | undefined {
+    return this.records.get(sessionID)
   }
 }
 
