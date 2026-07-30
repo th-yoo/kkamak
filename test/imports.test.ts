@@ -52,11 +52,43 @@ function isRelative(specifier: string): boolean {
   return specifier.startsWith("./") || specifier.startsWith("../")
 }
 
+/**
+ * Classification for one import, against a boundary directory. Exported and
+ * fixture-tested below so the scans over the real tree cannot pass vacuously.
+ */
+export function classifyImport(
+  fromFile: string,
+  specifier: string,
+  boundary: string,
+): "ok" | "escapes" | "bare" {
+  if (!isRelative(specifier) && specifier !== "..") return "bare"
+  const resolved = path.resolve(path.dirname(fromFile), specifier)
+  // path.sep matters: a sibling named `kernel-extras` must not pass a bare
+  // startsWith check against a `kernel` boundary.
+  const inside = resolved === boundary || resolved.startsWith(boundary + path.sep)
+  return inside ? "ok" : "escapes"
+}
+
+/**
+ * A call whose specifier is not a single literal string: a computed value, a
+ * concatenation, or a template. None can be checked statically, so none are
+ * allowed. Matches `require(` too — the previous scan looked only at `import(`.
+ */
+export const COMPUTED_CALL_PATTERN =
+  /\b(?:import|require)\s*\(\s*(?:[^"'`\s)]|(?:"[^"]*"|'[^']*'|`[^`]*`)\s*\+|`[^`]*\$\{)/
+
 const allSources = [
   ...sourceFiles(path.join(PACKAGE_ROOT, "src")),
   ...sourceFiles(path.join(PACKAGE_ROOT, "test")),
 ]
-const allImports = allSources.flatMap(importsIn)
+const SELF_FILE = path.resolve(import.meta.path)
+// This file's own fixtures below necessarily contain realistic import/require
+// syntax as string literals (that is the point of testing classifyImport and
+// COMPUTED_CALL_PATTERN against them). The regex-based importsIn scan cannot
+// tell those literals apart from real source, so its matches against this
+// file are dropped from the real-tree checks — the same self-exclusion
+// already applied, for the same reason, by the computed-specifier scan below.
+const allImports = allSources.flatMap(importsIn).filter((ref) => path.resolve(ref.file) !== SELF_FILE)
 const kernelSources = sourceFiles(KERNEL_DIR)
 
 function rel(file: string): string {
@@ -89,11 +121,7 @@ describe("kernel purity", () => {
   test("the kernel imports nothing but its own siblings", () => {
     const offenders = kernelSources
       .flatMap(importsIn)
-      .filter(({ file, specifier }) => {
-        if (!isRelative(specifier)) return true // node:*, bare packages: all banned
-        const resolved = path.resolve(path.dirname(file), specifier)
-        return resolved !== KERNEL_DIR && !resolved.startsWith(KERNEL_DIR + path.sep)
-      })
+      .filter(({ file, specifier }) => classifyImport(file, specifier, KERNEL_DIR) !== "ok")
       .map(({ file, specifier }) => `${rel(file)} -> ${specifier}`)
 
     expect(offenders).toEqual([])
@@ -136,11 +164,7 @@ describe("kernel purity", () => {
 describe("package containment", () => {
   test("no import escapes the package root", () => {
     const offenders = allImports
-      .filter(({ file, specifier }) => {
-        if (!isRelative(specifier)) return false // covered by the next test
-        const resolved = path.resolve(path.dirname(file), specifier)
-        return resolved !== PACKAGE_ROOT && !resolved.startsWith(PACKAGE_ROOT + path.sep)
-      })
+      .filter(({ file, specifier }) => classifyImport(file, specifier, PACKAGE_ROOT) === "escapes")
       .map(({ file, specifier }) => `${rel(file)} -> ${specifier}`)
 
     expect(offenders).toEqual([])
@@ -148,7 +172,10 @@ describe("package containment", () => {
 
   test("no import depends on a package that installation would leave behind", () => {
     const offenders = allImports
-      .filter(({ specifier }) => !isRelative(specifier) && !isBareAllowed(specifier))
+      .filter(
+        ({ file, specifier }) =>
+          classifyImport(file, specifier, PACKAGE_ROOT) === "bare" && !isBareAllowed(specifier),
+      )
       .map(({ file, specifier }) => `${rel(file)} -> ${specifier}`)
 
     expect(offenders).toEqual([])
@@ -179,8 +206,8 @@ describe("package containment", () => {
       // themselves as literals, which the scan would match.
       if (path.resolve(file) === path.resolve(import.meta.path)) continue
       const source = fs.readFileSync(file, "utf8")
-      for (const match of source.matchAll(/\bimport\s*\(\s*([^"'\s)])/g)) {
-        offenders.push(`${rel(file)}: import(${match[1]}…`)
+      for (const match of source.matchAll(new RegExp(COMPUTED_CALL_PATTERN, "g"))) {
+        offenders.push(`${rel(file)}: ${match[0]}…`)
       }
     }
     expect(offenders).toEqual([])
@@ -191,5 +218,54 @@ describe("package containment", () => {
       dependencies?: Record<string, string>
     }
     expect(pkg.dependencies ?? {}).toEqual({})
+  })
+})
+
+describe("the scan detects violations it is meant to catch", () => {
+  const KERNEL_FILE = path.join(KERNEL_DIR, "gate.ts")
+
+  test.each([
+    ["a sibling inside the boundary", "./config.ts", "ok"],
+    ["a node builtin", "node:fs", "bare"],
+    ["a bare package", "lodash", "bare"],
+    ["an escape to a sibling layer", "../runtime/index.ts", "escapes"],
+    ["an escape above the package", "../../../elsewhere.ts", "escapes"],
+  ] as const)("classifies %s", (_label, specifier, expected) => {
+    expect(classifyImport(KERNEL_FILE, specifier, KERNEL_DIR)).toBe(expected)
+  })
+
+  test("flags an escape from the package root, not just from the kernel", () => {
+    // src/runtime/x.ts sits two directories below PACKAGE_ROOT, so it takes
+    // three ".." segments to actually leave PACKAGE_ROOT (two would only
+    // land back at PACKAGE_ROOT itself, which is still inside it).
+    expect(classifyImport(path.join(PACKAGE_ROOT, "src/runtime/x.ts"), "../../../outside.ts", PACKAGE_ROOT))
+      .toBe("escapes")
+  })
+
+  test("treats the boundary directory itself as inside it", () => {
+    expect(classifyImport(path.join(KERNEL_DIR, "sub/x.ts"), "..", KERNEL_DIR)).toBe("ok")
+  })
+
+  // Guards against a near-miss prefix comparison: a sibling directory whose
+  // name merely starts with the boundary's name must count as an escape.
+  test("is not fooled by a directory whose name shares the boundary's prefix", () => {
+    expect(classifyImport(KERNEL_FILE, "../kernel-extras/x.ts", KERNEL_DIR)).toBe("escapes")
+  })
+
+  test.each([
+    ["a computed require", "require(computedPath)"],
+    ["a computed dynamic import", "import(computedPath)"],
+    ["a concatenated dynamic import", 'import("./" + externalPath)'],
+    ["a template dynamic import", "import(`./${name}.ts`)"],
+  ])("flags %s as an unresolvable specifier", (_label, source) => {
+    expect(source).toMatch(COMPUTED_CALL_PATTERN)
+  })
+
+  test.each([
+    ['a literal import', 'import x from "./a.ts"'],
+    ['a literal require', 'require("node:fs")'],
+    ['a literal dynamic import', 'const m = await import("./b.ts")'],
+  ])("does not flag %s", (_label, source) => {
+    expect(source).not.toMatch(COMPUTED_CALL_PATTERN)
   })
 })
