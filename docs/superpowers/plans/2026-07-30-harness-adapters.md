@@ -547,6 +547,13 @@ describe("composeBlockMessage", () => {
     expect(message.length).toBeLessThan(MAX_EVIDENCE_BYTES * 1.5)
     expect(message.toLowerCase()).toContain("truncated")
   })
+
+  // A test runner's output is full of three-byte glyphs, so a code-unit cap
+  // would let a "16,000-byte" message reach ~48 KB of UTF-8 on the wire.
+  test("caps the composed message in bytes, not code units", () => {
+    const message = composeBlockMessage(block({ evidence: "\u2713".repeat(MAX_EVIDENCE_BYTES) }))
+    expect(Buffer.byteLength(message, "utf8")).toBeLessThan(MAX_EVIDENCE_BYTES * 1.5)
+  })
 })
 
 describe("truncateEvidence", () => {
@@ -562,6 +569,22 @@ describe("truncateEvidence", () => {
   test("caps the result", () => {
     const out = truncateEvidence("x".repeat(MAX_EVIDENCE_BYTES * 3))
     expect(out.length).toBeLessThanOrEqual(MAX_EVIDENCE_BYTES + 200)
+  })
+
+  test("caps multi-byte evidence by its byte size", () => {
+    const out = truncateEvidence("\u2713".repeat(MAX_EVIDENCE_BYTES))
+    expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(MAX_EVIDENCE_BYTES + 200)
+  })
+
+  test("leaves multi-byte evidence that fits alone", () => {
+    const fits = "\u2713".repeat(10)
+    expect(truncateEvidence(fits)).toBe(fits)
+  })
+
+  // Slicing bytes can cut through a character; the harness must never see the
+  // wreckage.
+  test("never emits a broken code point at the cut", () => {
+    expect(truncateEvidence("\u2713".repeat(MAX_EVIDENCE_BYTES))).not.toContain("\uFFFD")
   })
 })
 ```
@@ -582,10 +605,22 @@ export const MAX_EVIDENCE_BYTES = 16_000
 
 type BlockDecision = Extract<GateDecision, { kind: "block" }>
 
-/** Keeps the tail: a test runner's summary is at the end of its output. */
+/**
+ * Keeps the tail: a test runner's summary is at the end of its output.
+ *
+ * Measured in UTF-8 bytes, not code units — a test runner's output is full of
+ * `✓`/`✗`/box-drawing glyphs at three bytes each, so a `.length` cap would let
+ * a "16,000-byte" message reach ~48 KB on wire. The tail is decoded
+ * non-fatally and a leading replacement character dropped, so a cut through
+ * the middle of a character never reaches the harness.
+ */
 export function truncateEvidence(evidence: string): string {
-  if (evidence.length <= MAX_EVIDENCE_BYTES) return evidence
-  return `…output truncated, showing the last ${MAX_EVIDENCE_BYTES} characters…\n${evidence.slice(-MAX_EVIDENCE_BYTES)}`
+  const bytes = Buffer.from(evidence, "utf8")
+  if (bytes.length <= MAX_EVIDENCE_BYTES) return evidence
+  const tail = new TextDecoder("utf-8", { fatal: false })
+    .decode(bytes.subarray(bytes.length - MAX_EVIDENCE_BYTES))
+    .replace(/^�/, "")
+  return `…output truncated, showing the last ${MAX_EVIDENCE_BYTES} bytes…\n${tail}`
 }
 
 export function composeBlockMessage(decision: BlockDecision): string {
