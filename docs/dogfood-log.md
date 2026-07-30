@@ -1,5 +1,32 @@
 # Dogfood log
 
+## BASELINE — sealed 2026-07-30, BEFORE any km-crank round on this repo
+
+Frozen descriptive anchor of the pre-crank state. Everything below was
+produced with NO machine-proposed mechanism change active: installed
+kkamak 0.2.1 defaults, `gate.json` = `{check: "bun test", rounds: 2,
+gauge: true}`, no playbook candidate, no trial live. Repo at `0a0ea5c`.
+
+**Stream (yoo-dev, day 1, 2 sessions, 48 lines):**
+- gate cycles 25 — clean 20, catch 5 (rounds-to-accept 2,2,2,2,2 — every
+  block fixed first retry), exhausted 0, interrupted 0
+- skippedStop 13 · gauge-only 10 · median checkMs 898ms
+- reinject arms: v0 16 / v1 9 (within-cycle counts)
+- committed snapshot: `evidence/kkamak-sensors/yoo-dev/` in the
+  meta-harness repo
+
+**How to use this baseline — and how NOT to:**
+- USE as the descriptive "before" anchor: what the stream looked like
+  with stock mechanisms, and as the sanity reference for instrument
+  regressions (e.g. if skippedStop rate or checkMs shifts wildly after a
+  plugin change with no workload change).
+- DO NOT use as a control arm. All n are under MIN_N=20 per class (rates
+  here are noise) and before/after comparison against a later window is
+  exactly the workload-drift confound the §4.3 pre-registration exists to
+  avoid. Any improvement/regression CLAIM about a crank-proposed change
+  goes through §4.3 arms (within-workload randomized, floors, calibrated)
+  — never through a delta against this block.
+
 One dated entry per working session in this repo. Two things only:
 the day's sensor numbers, and mechanism observations the sensor stream
 cannot see (behavioral shifts, qualitative saves, instrument anomalies).
