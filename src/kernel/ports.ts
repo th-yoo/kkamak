@@ -97,7 +97,12 @@ export interface StateStore {
 }
 
 export interface SensorSink {
-  append(line: SensorLine): void
+  /**
+   * `relativePath` comes from the config the kernel just read, so the sink
+   * stays dumb about configuration and the escape hatch keeps working: change
+   * `sensor` in gate.json and the next line lands in the new file.
+   */
+  append(line: SensorLine, relativePath: string): void
 }
 
 export interface ConfigSource {

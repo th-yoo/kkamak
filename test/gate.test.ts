@@ -69,6 +69,14 @@ describe("passing check", () => {
     expect(h.check.calls).toHaveLength(1)
   })
 
+  test("writes the line to the configured sensor path", async () => {
+    const h = makeHarness({ raw: '{"check":"x","sensor":"logs/gate.ndjson"}', script: [PASS] })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    expect(h.sensor.paths).toEqual(["logs/gate.ndjson"])
+  })
+
   test("passes the configured timeout to the runner", async () => {
     const h = makeHarness({ raw: '{"check":"x","checkTimeoutMs":1234}', script: [PASS] })
     const gate = createGate(h.host)

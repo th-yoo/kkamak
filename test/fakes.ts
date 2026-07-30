@@ -57,8 +57,10 @@ export class FakeStore {
 
 export class FakeSensor {
   readonly lines: SensorLine[] = []
-  append(line: SensorLine): void {
+  readonly paths: string[] = []
+  append(line: SensorLine, relativePath: string): void {
     this.lines.push(line)
+    this.paths.push(relativePath)
   }
 }
 

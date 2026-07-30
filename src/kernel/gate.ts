@@ -85,7 +85,7 @@ function onNewUserPrompt(
   if (!state.gating) return ALLOW
 
   if (config) {
-    record(host, {
+    record(host, config.sensor, {
       sessionId,
       check: config.check,
       accepted: true,
@@ -133,7 +133,7 @@ async function onStopRequested(
   const outcomes = [...state.outcomes, outcome]
 
   if (outcome === "passed") {
-    record(host, {
+    record(host, config.sensor, {
       sessionId,
       check: config.check,
       accepted: true,
@@ -162,7 +162,7 @@ async function onStopRequested(
   }
 
   const attempts = config.rounds + 1
-  record(host, {
+  record(host, config.sensor, {
     sessionId,
     check: config.check,
     accepted: true,
@@ -244,9 +244,9 @@ function withPersist(
 }
 
 /** The sensor is an observation, never a precondition for a decision. */
-function record(host: GateHost, args: SensorArgs): void {
+function record(host: GateHost, sensorPath: string, args: SensorArgs): void {
   try {
-    host.sensor.append(buildSensorLine(host.info, host.clock, args))
+    host.sensor.append(buildSensorLine(host.info, host.clock, args), sensorPath)
   } catch (err) {
     note(host, `could not append a sensor line: ${describe(err)}`)
   }
