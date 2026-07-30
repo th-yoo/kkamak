@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createGate } from "../src/kernel/gate.ts"
+import { INITIAL_STATE } from "../src/kernel/state.ts"
 import { FAIL, FakeClock, makeHarness, PASS } from "./fakes.ts"
 
 const SESSION = "sess-1"
@@ -374,9 +375,10 @@ describe("fail-open: no port failure may wedge a session", () => {
     expect(await gate.handle(stop)).toEqual({ kind: "allow" })
   })
 
-  // The decision is already computed by the time state is persisted; a failed
-  // write must not retroactively change it.
-  test("a throwing state save does not change the decision", async () => {
+  // A block that cannot be persisted would never advance `round` on disk, so
+  // every later stop would recompute the same block decision forever. The
+  // gate downgrades to allow instead of issuing a block it cannot bound.
+  test("a throwing state save downgrades a block rather than issuing one it cannot bound", async () => {
     const h = makeHarness({ fallback: FAIL })
     const realSave = h.store.save.bind(h.store)
     h.host.state = {
@@ -388,7 +390,7 @@ describe("fail-open: no port failure may wedge a session", () => {
     }
     const gate = createGate(h.host)
     await gate.handle(edit)
-    expect(await gate.handle(stop)).toMatchObject({ kind: "block", round: 1 })
+    expect(await gate.handle(stop)).toMatchObject({ kind: "allow" })
   })
 
   test("a throwing sensor sink does not change the decision", async () => {
@@ -453,5 +455,59 @@ describe("fail-open: no port failure may wedge a session", () => {
     const d = await gate.handle(stop)
     expect(d.kind).toBe("block")
     expect((d as { evidence: string }).evidence.length).toBeGreaterThan(0)
+  })
+})
+
+describe("a block that cannot be recorded is not a block", () => {
+  /** Arms the session durably, then makes every subsequent save fail. */
+  function armedThenReadOnly() {
+    const h = makeHarness({ fallback: FAIL })
+    h.store.save(SESSION, { ...INITIAL_STATE, edited: true })
+    h.host.state = {
+      load: (id) => h.store.load(id),
+      save: () => {
+        throw new Error("ENOSPC")
+      },
+    }
+    return h
+  }
+
+  test("downgrades to allow when the round cannot be persisted", async () => {
+    const h = armedThenReadOnly()
+    const gate = createGate(h.host)
+    const decision = await gate.handle(stop)
+    expect(decision.kind).toBe("allow")
+    expect((decision as { notice?: string }).notice).toBeString()
+  })
+
+  // The actual wedge: the round never advances on disk, so a naive
+  // implementation recomputes the same block decision forever.
+  test("cannot wedge a session, however many times the agent retries", async () => {
+    const h = armedThenReadOnly()
+    const gate = createGate(h.host)
+    for (let attempt = 0; attempt < 5; attempt++) {
+      expect((await gate.handle(stop)).kind).toBe("allow")
+    }
+  })
+
+  test("still blocks normally once the round can be persisted", async () => {
+    const h = makeHarness({ fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    expect(await gate.handle(stop)).toMatchObject({ kind: "block", round: 1 })
+  })
+
+  test("says why it let the turn through", async () => {
+    const h = armedThenReadOnly()
+    const gate = createGate(h.host)
+    const decision = await gate.handle(stop)
+    expect((decision as { notice: string }).notice.toLowerCase()).toContain("could not")
+  })
+
+  test("logs the persist failure", async () => {
+    const h = armedThenReadOnly()
+    const gate = createGate(h.host)
+    await gate.handle(stop)
+    expect(h.logger.messages.join("\n")).toContain("ENOSPC")
   })
 })

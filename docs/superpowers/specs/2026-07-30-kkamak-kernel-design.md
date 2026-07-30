@@ -170,8 +170,12 @@ rather than v0.2.0's `accepted`/`verify-failed` — a deliberate, documented ren
 The gate must never wedge a session. Concretely:
 
 - `handle()` wraps everything in a catch-all that logs and returns `allow`.
-- Port failures are contained individually: a throwing `state.save` or `sensor.append` must not
-  change the decision that was already computed.
+- Port failures are contained individually: a throwing `sensor.append` must not change the
+  decision that was already computed. A throwing `state.save` is the same for every branch
+  except the block branch: there, an unrecorded block would never advance `round` on disk, so
+  every later stop would recompute the same block decision forever — a block that cannot be
+  recorded is a block that cannot be bounded, so the gate downgrades that decision to `allow`
+  instead of issuing it.
 - A corrupt, absent, or wrong-shaped state file reads back as fresh initial state.
 - Three consecutive internal errors disarm the gate for the rest of the session. Unlike v0.2.0,
   which merely reset state (so the next edit re-armed and the failure repeated), `disarmed` is

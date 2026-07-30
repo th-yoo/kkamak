@@ -149,7 +149,7 @@ async function onStopRequested(
   // rounds is a budget of blocks: `rounds + 1` failing checks ends the cycle.
   if (state.round < config.rounds) {
     const round = state.round + 1
-    persist(host, sessionId, {
+    const recorded = persist(host, sessionId, {
       ...state,
       gating: true,
       round,
@@ -158,6 +158,19 @@ async function onStopRequested(
       // A real verdict, pass or fail, proves the runner works.
       errorStreak: 0,
     })
+
+    // A block we cannot record is a block we cannot bound: the round would
+    // never advance on disk, so every later stop would recompute this same
+    // decision and the session could never get through. Allow instead.
+    if (!recorded) {
+      return {
+        kind: "allow",
+        notice:
+          "kkamak: the check failed, but the gate could not record the attempt" +
+          " and so cannot bound its retries — stop allowed; check that .km/ is writable",
+      }
+    }
+
     return { kind: "block", evidence: evidenceFrom(result), round, roundsMax: config.rounds }
   }
 
@@ -221,15 +234,17 @@ function elapsed(host: GateHost, startedAt: number): number {
 }
 
 /**
- * The decision is already computed by the time we persist, so a failed write
- * must not retroactively change it. Losing state fails open on the next event:
- * a session that forgets it was gating simply stops being gated.
+ * Returns false when the state could not be written. Callers that issued a
+ * decision already do not care; the block branch does, because a block it
+ * cannot record is a block it cannot bound.
  */
-function persist(host: GateHost, sessionId: string, state: GateState): void {
+function persist(host: GateHost, sessionId: string, state: GateState): boolean {
   try {
     host.state.save(sessionId, state)
+    return true
   } catch (err) {
     note(host, `could not persist state for ${sessionId}: ${describe(err)}`)
+    return false
   }
 }
 
