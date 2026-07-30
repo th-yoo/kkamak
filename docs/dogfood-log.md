@@ -32,6 +32,21 @@ the day's sensor numbers, and mechanism observations the sensor stream
 cannot see (behavioral shifts, qualitative saves, instrument anomalies).
 This file is proposer evidence — keep entries factual and dated.
 
+## 2026-07-30 — km-crank round 1 against this repo's evidence (yoo-dev, supervised)
+
+First proposer-loop run ever to ingest this repo's stream (post-baseline
+seal). Outcome: **review gate REJECTED the single proposed bullet — no
+candidate, no trial.** The bullet ("derive the output binding
+independently of the filter…") read query/projection-domain, not derived
+from this repo's evidence; rejection trigger was "leak: path-like or
+file-extension token" — likely a false-positive hit on the slash in
+"filters/qualifies", so right outcome, questionable reason. Rejection
+ledgered (proposer sees it next round). Machinery exercised end-to-end:
+scan → evidence assembly (all 4 repos) → proposer → review gate → ledger.
+Found: office SITREP delivery fails on missing ~/.squad/ccacp-slack.env
+and marks the round "failure" after a correct decision — transport
+failure should degrade to stdout, not taint the round.
+
 ## 2026-07-30 — session 1 (yoo-dev, Opus 5 → Sonnet 5)
 
 **Numbers (installed kkamak 0.2.0 → 0.2.1 mid-day):** ~15 gate cycles,
