@@ -1468,16 +1468,31 @@ describe("Claude Code plugin manifests", () => {
 })
 
 describe("installation shape", () => {
-  test("every file installation must copy is present", () => {
+  // Installation copies this directory out of the repo, so a deleted module or
+  // a dangling relative import ships as a plugin that silently never runs. A
+  // curated list of entrypoints cannot see that; the import closure can.
+  test("every file the adapters import is present", () => {
+    const files = importClosure(["src/adapters/claude-code/hook-cli.ts", "src/adapters/opencode/plugin.ts"])
+    expect(files.size).toBeGreaterThan(10)
     for (const rel of [
-      ".claude-plugin/plugin.json",
-      "hooks/hooks.json",
-      "package.json",
-      "src/kernel/index.ts",
-      "src/runtime/index.ts",
-      "src/adapters/claude-code/hook-cli.ts",
-      "src/adapters/opencode/plugin.ts",
+      "src/adapters/claude-code/emit.ts",
+      "src/adapters/claude-code/hook-input.ts",
+      "src/adapters/opencode/opencode-types.ts",
+      "src/adapters/shared/framing.ts",
+      "src/kernel/gate.ts",
+      "src/runtime/file-state-store.ts",
     ]) {
+      expect([...files]).toContain(rel)
+    }
+    for (const rel of files) {
+      expect(rel.startsWith("..")).toBe(false) // never escapes the package root
+      expect(fs.existsSync(path.join(ROOT, rel))).toBe(true)
+    }
+  })
+
+  // Nothing imports these, so the closure cannot reach them.
+  test("the manifests installation needs are present", () => {
+    for (const rel of [".claude-plugin/plugin.json", "hooks/hooks.json", "package.json"]) {
       expect(fs.existsSync(path.join(ROOT, rel))).toBe(true)
     }
   })
