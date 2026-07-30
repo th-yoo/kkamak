@@ -1,0 +1,4 @@
+{
+  "check": "bun test",
+  "rounds": 2
+}
