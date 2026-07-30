@@ -419,9 +419,9 @@ describe("fail-open: no port failure may wedge a session", () => {
     expect(await gate.handle(stop)).toEqual({ kind: "allow" })
   })
 
-  // The clock is only read on the paths that stamp a duration: the first stop
-  // of a cycle, and the stop that ends one. A continuing stop that blocks
-  // again never reads it, so the exhausting stop has to be the one that throws.
+  // Every stop that reaches the runner now reads the clock at least once, to
+  // time the check itself. Which read throws does not matter to this test —
+  // only that a clock failure on the exhausting stop still fails open.
   test("a clock that throws while ending a cycle allows", async () => {
     const h = makeHarness({ raw: '{"check":"x","rounds":1}', fallback: FAIL })
     const gate = createGate(h.host)
