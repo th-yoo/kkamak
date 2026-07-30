@@ -1482,11 +1482,17 @@ describe("installation shape", () => {
     }
   })
 
+  // The adapter's comments name the package on purpose — to say it must not be
+  // imported — so this scans import statements, not prose.
   test("the opencode adapter does not import the opencode SDK", () => {
     const dir = path.join(ROOT, "src/adapters/opencode")
     for (const name of fs.readdirSync(dir)) {
       const source = fs.readFileSync(path.join(dir, name), "utf8")
-      expect(source).not.toContain("@opencode-ai")
+      const specifiers = [...source.matchAll(/(?:from|import|require\()\s*["'`]([^"'`]+)["'`]/g)]
+      expect(specifiers.map((m) => m[1])).not.toContain("@opencode-ai/plugin")
+      for (const [, specifier] of specifiers) {
+        expect(specifier).not.toStartWith("@opencode-ai")
+      }
     }
   })
 })
