@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **Zero runtime dependencies.** `package.json` must keep an empty `dependencies`. Only `node:*` builtins and relative imports. `test/imports.test.ts` enforces this and must stay green.
-- **Never modify `src/kernel/`.** The kernel is complete and reviewed. If an adapter seems to need a kernel change, stop and raise it instead of editing.
+- **`src/kernel/` is frozen except in Task 0.** Task 0 makes the two instrument changes the live-dogfood lessons require, and nothing else. From Task 1 onward the kernel is closed again: if an adapter seems to need a kernel change, stop and raise it instead of editing.
 - **No import may escape the package root** (`/home/th-yoo/z2/kkamak`). Installation copies this directory out of the repo.
 - **`@opencode-ai/plugin` types must NOT be imported.** It is not a dependency of this package and would break the installed plugin. Declare the minimal structural types the adapter needs locally, in `src/adapters/opencode/opencode-types.ts`.
 - **Fail-open is absolute.** Every adapter entry point wraps its whole body in try/catch and, on any error, allows the session through with no output. A broken hook must never break a user's session.
@@ -43,8 +43,21 @@ So in opencode a "block" cannot refuse anything. It is delivered by *continuing*
 
 ---
 
+## Instrument requirements from live dogfood (kkamak v0.2.1)
+
+Two blind spots observed while the installed v0.2.1 plugin gated a real session. Both are instrument defects — the gate behaved correctly and measured nothing useful — and both are fixed in Task 0 because the sensor record is kernel-owned.
+
+**1. Skipped-Stop boundary visibility.** A queued user message can consume the turn boundary, so the harness never delivers a stop event: the gate never runs, the edits go unmeasured, and *nothing at all* is written. From the sensor stream that session is indistinguishable from one with no edits. The kernel already models new-user-prompt preemption of an *open cycle*; the uncovered case is the prompt arriving while the session is **armed but no cycle ever ran** (`edited && !gating`). That case must emit a diagnostic sensor line — `rounds: []`, `checkMs: []`, and a dedicated `skippedStop: true` field — rather than dropping the boundary silently. State stays armed (`edited` is *not* cleared), so the next real stop still measures the accumulated edits.
+
+**2. Per-round check timing.** `durationMs` measures the whole cycle wall-clock, which includes agent think time, subagent runs, and human wait: an observed cycle was 420s for a check that actually ran in ~1s. Cycle duration is worth keeping, but it says nothing about what the check costs. The record must therefore also carry `checkMs: number[]` — one entry per round, parallel to `rounds`, each measured around the check runner call only.
+
+**Both sensor fields are additive and optional.** `SensorLine` declares them optional, `buildSensorLine` omits a field it was not given, and the core ten fields keep their meaning and position. A consumer of existing lines must keep working unchanged; a consumer of new lines must tolerate `skippedStop` being absent (the common case) and `checkMs` being absent (lines written by an older build).
+
+---
+
 ## File Structure
 
+- `src/kernel/ports.ts`, `state.ts`, `sensor.ts`, `gate.ts` — Task 0 only: the two instrument fields.
 - `src/adapters/shared/framing.ts` — turns a `GateDecision` into user-facing text. Shared so both harnesses say the same thing. Owns evidence truncation.
 - `src/adapters/claude-code/hook-input.ts` — parses and validates Claude Code hook JSON. Pure; no I/O.
 - `src/adapters/claude-code/emit.ts` — maps a `GateDecision` to a Claude Code stdout/stderr/exit-code plan. Pure.
@@ -53,6 +66,430 @@ So in opencode a "block" cannot refuse anything. It is delivered by *continuing*
 - `src/adapters/opencode/plugin.ts` — the opencode plugin module.
 - `hooks/hooks.json`, `.claude-plugin/plugin.json` — Claude Code plugin manifests.
 - `test/framing.test.ts`, `test/claude-code-adapter.test.ts`, `test/opencode-adapter.test.ts`, `test/packaging.test.ts` — tests.
+
+---
+
+### Task 0: Kernel instrumentation — skipped-stop visibility and per-round check timing
+
+Read the "Instrument requirements" section above first. This is the only task allowed to touch `src/kernel/`.
+
+**Files:**
+- Modify: `src/kernel/ports.ts`, `src/kernel/state.ts`, `src/kernel/sensor.ts`, `src/kernel/gate.ts`, `src/kernel/index.ts`, `src/runtime/file-state-store.ts`
+- Test: `test/sensor.test.ts`, `test/gate.test.ts`, `test/state.test.ts`, `test/runtime.test.ts` (all existing; extend them)
+
+**Interfaces:**
+- `GateState` gains `checkMs: number[]` — per-round check durations, parallel to `outcomes`.
+- `SensorLine` gains `checkMs?: number[]` and `skippedStop?: boolean`, both optional.
+- `SensorArgs` gains the same two, both optional.
+- `sensor.ts` gains `OPTIONAL_SENSOR_FIELDS: readonly (keyof SensorLine)[]` — `["checkMs", "skippedStop"]`.
+- `state.ts` gains `normalizeGateState(s: GateState): GateState` — fills fields added after a record was written and copies its arrays.
+- `src/kernel/index.ts` re-exports `OPTIONAL_SENSOR_FIELDS` and `normalizeGateState`.
+
+**One existing test changes behaviour deliberately.** `test/gate.test.ts` has `"an ordinary prompt with no open cycle leaves \`edited\` intact"`, which asserts `h.sensor.lines).toHaveLength(0)`. That silence is exactly the blind spot being fixed. Update that assertion to expect the one diagnostic line and keep every other assertion in the test as-is (`edited` intact, the following stop still blocks). Do not delete the test, and do not touch `"a prompt in a session that never edited anything records nothing"` — an unarmed session must still record nothing.
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `test/sensor.test.ts`:
+
+```ts
+describe("additive fields", () => {
+  test("declares the two optional fields", () => {
+    expect([...OPTIONAL_SENSOR_FIELDS].sort()).toEqual(["checkMs", "skippedStop"])
+  })
+
+  // Existing consumers must not have to learn a new field to keep working.
+  test("omits both when not supplied, so an ordinary line is unchanged", () => {
+    const line = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds] })
+    expect(Object.keys(line).sort()).toEqual([...SENSOR_FIELDS].sort())
+    expect("checkMs" in line).toBe(false)
+    expect("skippedStop" in line).toBe(false)
+  })
+
+  test("carries per-round check times parallel to rounds", () => {
+    const line = buildSensorLine(info, clock, {
+      ...base,
+      rounds: ["failed", "passed"],
+      checkMs: [1_200, 900],
+    })
+    expect(line.checkMs).toEqual([1_200, 900])
+    expect(line.checkMs).toHaveLength(line.rounds.length)
+  })
+
+  test("copies checkMs, like rounds, so later mutation cannot rewrite history", () => {
+    const checkMs = [10]
+    const line = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds], checkMs })
+    checkMs.push(20)
+    expect(line.checkMs).toEqual([10])
+  })
+
+  test("keeps an empty checkMs, which is meaningful on a skipped-stop line", () => {
+    const line = buildSensorLine(info, clock, { ...base, rounds: [], checkMs: [] })
+    expect(line.checkMs).toEqual([])
+  })
+
+  test("marks a skipped stop", () => {
+    const line = buildSensorLine(info, clock, { ...base, rounds: [], skippedStop: true })
+    expect(line.skippedStop).toBe(true)
+  })
+
+  test("a skipped-stop line survives a JSON round trip", () => {
+    const line = buildSensorLine(info, clock, {
+      ...base,
+      rounds: [],
+      checkMs: [],
+      skippedStop: true,
+    })
+    expect(JSON.parse(JSON.stringify(line))).toEqual(line)
+    expect(JSON.stringify(line)).not.toContain("\n")
+  })
+})
+```
+
+Add to `test/gate.test.ts`:
+
+```ts
+// A queued user message can consume the turn boundary, so the harness never
+// delivers a stop and the edits go unmeasured. Silence there is the blind spot.
+describe("a skipped stop boundary is visible", () => {
+  test("records a diagnostic line when a prompt arrives on an armed session", async () => {
+    const h = makeHarness({ fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    expect(await gate.handle(prompt)).toEqual({ kind: "allow" })
+
+    expect(h.sensor.lines).toHaveLength(1)
+    expect(h.sensor.lines[0]).toMatchObject({
+      sessionId: SESSION,
+      check: "bun test",
+      skippedStop: true,
+      rounds: [],
+      checkMs: [],
+      gateExhausted: false,
+    })
+    expect(h.check.calls).toHaveLength(0) // no check ran: there was no stop
+  })
+
+  test("leaves the session armed, so the next real stop still measures", async () => {
+    const h = makeHarness({ fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(prompt)
+
+    expect(h.store.peek(SESSION)?.edited).toBe(true)
+    expect(await gate.handle(stop)).toMatchObject({ kind: "block", round: 1 })
+  })
+
+  test("every skipped boundary is recorded, not just the first", async () => {
+    const h = makeHarness({ fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(prompt)
+    await gate.handle(prompt)
+    expect(h.sensor.lines).toHaveLength(2)
+    expect(h.sensor.lines.every((l) => l.skippedStop === true)).toBe(true)
+  })
+
+  test("an interrupted open cycle is still reported as interrupted, not skipped", async () => {
+    const h = makeHarness({ fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    await gate.handle(prompt)
+    expect(h.sensor.lines).toHaveLength(1)
+    expect(h.sensor.lines[0]?.interrupted).toBe(true)
+    expect(h.sensor.lines[0]?.skippedStop).toBeUndefined()
+    expect(h.sensor.lines[0]?.rounds).toEqual(["failed"])
+  })
+
+  test("no config means no sensor path, so nothing is recorded", async () => {
+    const h = makeHarness({ fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    h.config.raw = undefined
+    expect(await gate.handle(prompt)).toEqual({ kind: "allow" })
+    expect(h.sensor.lines).toHaveLength(0)
+  })
+})
+
+// Cycle durationMs includes agent and human wait time: an observed 420s cycle
+// ran a ~1s check. Check cost has to be measurable on its own.
+describe("per-round check timing", () => {
+  test("times the check runner, not the whole cycle", async () => {
+    const clock = new FakeClock(1_000, 0)
+    const h = makeHarness({ raw: '{"check":"x","rounds":1}', fallback: FAIL, clock })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+
+    // Round 1: the check itself takes 300ms.
+    h.check.onRun = () => clock.set(clock.peek() + 300)
+    await gate.handle(stop)
+
+    // …then the agent and the human take 100s before the next stop.
+    clock.set(101_300)
+    h.check.onRun = () => clock.set(clock.peek() + 400)
+    await gate.handle(stop)
+
+    const line = h.sensor.lines[0]!
+    expect(line.checkMs).toEqual([300, 400])
+    expect(line.durationMs).toBeGreaterThan(100_000) // cycle time still recorded
+  })
+
+  test("one entry per round, parallel to rounds, on a passing cycle", async () => {
+    const h = makeHarness({ script: [FAIL, PASS] })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    await gate.handle(stop)
+
+    const line = h.sensor.lines[0]!
+    expect(line.rounds).toEqual(["failed", "passed"])
+    expect(line.checkMs).toHaveLength(2)
+    expect(line.checkMs?.every((ms) => typeof ms === "number" && ms >= 0)).toBe(true)
+  })
+
+  test("accumulates across the rounds of an exhausted cycle", async () => {
+    const h = makeHarness({ fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    await gate.handle(stop)
+    await gate.handle(stop)
+    expect(h.sensor.lines[0]?.checkMs).toHaveLength(3)
+  })
+
+  test("an interrupted cycle reports the rounds it did time", async () => {
+    const h = makeHarness({ fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    await gate.handle(prompt)
+    expect(h.sensor.lines[0]?.checkMs).toHaveLength(1)
+  })
+
+  test("a check that could not run consumes no round and times nothing", async () => {
+    const h = makeHarness({ fallback: new Error("spawn ENOENT") })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    expect(h.store.peek(SESSION)?.checkMs).toEqual([])
+  })
+})
+```
+
+`FakeCheck` needs one addition for the timing test — an optional hook fired inside `run`, and `FakeClock` needs a non-advancing peek. Add to `test/fakes.ts`:
+
+```ts
+// in FakeCheck
+  /** Lets a test advance a fake clock *during* the check, so per-round timing is observable. */
+  onRun?: () => void
+  // …and inside run(), after pushing the call:
+  this.onRun?.()
+
+// in FakeClock
+  /** Reads the current time without advancing, for tests that compute offsets. */
+  peek(): number {
+    return this.t
+  }
+```
+
+Add to `test/state.test.ts`:
+
+```ts
+test("initial state has no round times", () => {
+  expect(INITIAL_STATE.checkMs).toEqual([])
+  expect(isInitialState({ ...INITIAL_STATE })).toBe(true)
+})
+
+test("recorded round times mean the state is not initial", () => {
+  expect(isInitialState({ ...INITIAL_STATE, checkMs: [5] })).toBe(false)
+})
+
+test("a record written before checkMs existed is still valid, not corrupt", () => {
+  const { checkMs, ...legacy } = { ...INITIAL_STATE, edited: true, checkMs: [] }
+  expect(isGateState(legacy)).toBe(true)
+  expect(normalizeGateState(legacy as never).checkMs).toEqual([])
+  expect(normalizeGateState(legacy as never).edited).toBe(true)
+})
+
+test("a non-numeric checkMs is corrupt", () => {
+  expect(isGateState({ ...INITIAL_STATE, checkMs: ["x"] })).toBe(false)
+  expect(isGateState({ ...INITIAL_STATE, checkMs: "5" })).toBe(false)
+})
+
+test("normalising copies the arrays, so a loaded record cannot alias state", () => {
+  const source = { ...INITIAL_STATE, outcomes: ["failed" as const], checkMs: [7] }
+  const copy = normalizeGateState(source)
+  expect(copy.outcomes).not.toBe(source.outcomes)
+  expect(copy.checkMs).not.toBe(source.checkMs)
+})
+```
+
+Add to `test/runtime.test.ts` (`FileStateStore` section):
+
+```ts
+test("round times survive a save/load round trip", () => {
+  const store = new FileStateStore(dir)
+  store.save("s", { ...INITIAL_STATE, edited: true, gating: true, round: 1, outcomes: ["failed"], checkMs: [1_234] })
+  expect(store.load("s").checkMs).toEqual([1_234])
+})
+
+// A session in flight across an upgrade must not lose its armed state.
+test("a record written before checkMs existed loads as armed with no round times", () => {
+  const store = new FileStateStore(dir)
+  const { checkMs, ...legacy } = { ...INITIAL_STATE, edited: true, checkMs: [] }
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, `${recordName("s")}.json`), JSON.stringify(legacy))
+
+  const loaded = store.load("s")
+  expect(loaded.edited).toBe(true)
+  expect(loaded.checkMs).toEqual([])
+})
+```
+
+Match the existing helpers in that file for `dir`, imports and `recordName` — reuse whatever is already there rather than introducing a second pattern.
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `bun test`
+Expected: the new assertions fail (missing `OPTIONAL_SENSOR_FIELDS`, `normalizeGateState`, `skippedStop`, `checkMs`). Note which failures are compile-level so you can tell real progress from a module that will not load.
+
+- [ ] **Step 3: Extend the types in `ports.ts`**
+
+```ts
+// in GateState, after `outcomes`
+  /**
+   * Wall-clock ms of each round's check run, parallel to `outcomes`. Cycle
+   * duration includes agent and human wait time; this does not.
+   */
+  checkMs: number[]
+```
+
+```ts
+// in SensorLine, after `durationMs`
+  /**
+   * Per-round check execution time in ms, parallel to `rounds`. Optional: lines
+   * written before this field existed do not carry it.
+   */
+  checkMs?: number[]
+  /**
+   * Present and true only on a diagnostic line: a new user prompt consumed the
+   * turn boundary while the session was armed, so no stop was ever delivered
+   * and no check ran. `rounds` is empty on such a line.
+   */
+  skippedStop?: boolean
+```
+
+- [ ] **Step 4: Extend `state.ts`**
+
+`INITIAL_STATE` gains `checkMs: []`. `isInitialState` gains `!s.checkMs?.length` — optional-chained on purpose, because a record written before the field existed reaches this function with it missing. `isGateState` accepts a missing `checkMs` and rejects a wrong-typed one:
+
+```ts
+    (s.checkMs === undefined ||
+      (Array.isArray(s.checkMs) && s.checkMs.every((ms) => typeof ms === "number"))) &&
+```
+
+```ts
+/**
+ * Fills in fields added after a record was written and copies its arrays, so a
+ * loaded record can never alias — or be missing — what the kernel then spreads.
+ */
+export function normalizeGateState(s: GateState): GateState {
+  return { ...s, outcomes: [...s.outcomes], checkMs: [...(s.checkMs ?? [])] }
+}
+```
+
+`FileStateStore.load` returns `isGateState(parsed) ? normalizeGateState(parsed) : { ...INITIAL_STATE }`.
+
+- [ ] **Step 5: Extend `sensor.ts`**
+
+`SENSOR_FIELDS` keeps exactly its ten entries — it is the *core* schema and other code asserts its size. Add alongside it:
+
+```ts
+/**
+ * Additive fields. Emitted only when the gate has something to say with them,
+ * so every existing line and every existing consumer is unaffected.
+ */
+export const OPTIONAL_SENSOR_FIELDS = [
+  "checkMs",
+  "skippedStop",
+] as const satisfies readonly (keyof SensorLine)[]
+```
+
+`SensorArgs` gains `checkMs?: number[]` and `skippedStop?: boolean`. `buildSensorLine` builds the core line exactly as now, then appends only what it was given — additive fields last, so the leading columns of the NDJSON stay where a human's eye expects them:
+
+```ts
+  if (args.checkMs) line.checkMs = [...args.checkMs]
+  if (args.skippedStop) line.skippedStop = true
+  return line
+```
+
+- [ ] **Step 6: Extend `gate.ts`**
+
+`onNewUserPrompt`, the `!state.gating` branch — the whole point of lesson 1:
+
+```ts
+  if (!state.gating) {
+    // A queued prompt can consume the turn boundary, so the harness never
+    // delivers a stop: the check never runs and the edits go unmeasured. Say so
+    // rather than dropping the boundary silently. State is left untouched — the
+    // session stays armed, so the next real stop measures the edits
+    // cumulatively.
+    if (config && state.edited) {
+      record(host, config.sensor, {
+        sessionId,
+        check: config.check,
+        accepted: true,
+        gateExhausted: false,
+        interrupted: true,
+        skippedStop: true,
+        rounds: [],
+        checkMs: [],
+        durationMs: 0,
+      })
+    }
+    return ALLOW
+  }
+```
+
+`interrupted: true` because a prompt did preempt the boundary; `skippedStop` is what distinguishes "no cycle ever ran" from "an open cycle was cut short". `durationMs: 0` because nothing was timed — do not invent a duration.
+
+The open-cycle branch below it passes `checkMs: state.checkMs` on its record.
+
+`onStopRequested` times the runner call itself:
+
+```ts
+  const checkStartedAt = host.clock.now()
+  let result: CheckResult
+  try {
+    result = await host.check.run(config.check, config.checkTimeoutMs)
+    …
+  } catch (err) {
+    return onInternalError(host, sessionId, state, err)
+  }
+
+  // Measured around the runner only. `durationMs` spans the whole cycle and so
+  // includes agent think time, subagent runs and human wait; a 420s cycle can
+  // be a 1s check, and the two numbers answer different questions.
+  const checkMs = [...state.checkMs, host.clock.now() - checkStartedAt]
+```
+
+`checkMs` then goes into all three `record(...)` calls in this function and into the block branch's `persist(...)`. The internal-error path already spreads `state`, so a check that could not run consumes no round and times nothing — leave it alone.
+
+- [ ] **Step 7: Re-export from `src/kernel/index.ts`**
+
+Add `OPTIONAL_SENSOR_FIELDS` to the sensor export and `normalizeGateState` to the state export.
+
+- [ ] **Step 8: Run the whole suite**
+
+Run: `bun test && bunx tsc --noEmit`
+Expected: PASS, all 165 pre-existing tests plus the new ones. The only pre-existing assertion you may change is the one named in this task's preamble. If any other existing test fails, you have changed behaviour that was specified — stop and report it rather than editing the test.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add src/kernel src/runtime/file-state-store.ts test
+git commit -m "feat(kernel): record skipped stop boundaries and per-round check time"
+```
 
 ---
 
@@ -459,7 +896,23 @@ echo '{"session_id":"e2e","cwd":"/tmp/km-e2e","hook_event_name":"PostToolUse","t
 echo '{"session_id":"e2e","cwd":"/tmp/km-e2e","hook_event_name":"Stop"}' | bun $R/src/adapters/claude-code/hook-cli.ts Stop
 ```
 
-Expected: the first command prints nothing. The second prints one line of JSON containing `"decision":"block"`. Run the `Stop` command twice more: the third prints `systemMessage` with the exhausted notice, and `/tmp/km-e2e/.km/gate-outcomes.ndjson` then holds one line with `"gateExhausted":true` and `"app":"claude-code"`. Paste the actual output into your task report.
+Expected: the first command prints nothing. The second prints one line of JSON containing `"decision":"block"`. Run the `Stop` command twice more: the third prints `systemMessage` with the exhausted notice, and `/tmp/km-e2e/.km/gate-outcomes.ndjson` then holds one line with `"gateExhausted":true`, `"app":"claude-code"` and a `"checkMs"` array of three numbers. Paste the actual output into your task report.
+
+Then prove the skipped-stop boundary is visible end to end — this is lesson 1, and the `UserPromptSubmit` hook is the only thing that can see it:
+
+```bash
+cd /tmp && rm -rf km-e2e2 && mkdir km-e2e2 && cd km-e2e2
+echo '{"check":"exit 1","rounds":1}' > gate.json
+R=/home/th-yoo/z2/kkamak
+echo '{"session_id":"e2e2","cwd":"/tmp/km-e2e2","hook_event_name":"PostToolUse","tool_name":"Write"}' | bun $R/src/adapters/claude-code/hook-cli.ts PostToolUse
+# the queued message that eats the turn boundary — no Stop is ever delivered
+echo '{"session_id":"e2e2","cwd":"/tmp/km-e2e2","hook_event_name":"UserPromptSubmit"}' | bun $R/src/adapters/claude-code/hook-cli.ts UserPromptSubmit
+cat /tmp/km-e2e2/.km/gate-outcomes.ndjson
+# still armed: the next real stop measures the edit
+echo '{"session_id":"e2e2","cwd":"/tmp/km-e2e2","hook_event_name":"Stop"}' | bun $R/src/adapters/claude-code/hook-cli.ts Stop
+```
+
+Expected: the `UserPromptSubmit` hook prints nothing (it must never emit protocol output), the sensor file holds one line with `"skippedStop":true` and `"rounds":[]`, and the following `Stop` still blocks. Paste the actual sensor line into your task report.
 
 - [ ] **Step 9: Commit**
 
@@ -642,6 +1095,41 @@ describe("the self-prompt trap", () => {
 
     await hooks.event!({ event: { type: "session.idle", properties: { sessionID: "s1" } } })
     expect(client.prompts).toHaveLength(1) // stood down; no second block
+  })
+})
+
+// Lesson 1 from live dogfood: a queued human message can consume the turn
+// boundary, so session.idle never arrives and the edits go unmeasured. The
+// adapter's job is to deliver chat.message so the kernel can say so.
+describe("skipped stop boundary", () => {
+  test("a human message on an armed session records a skippedStop line", async () => {
+    const { hooks, client } = await plugin("exit 1", 2)
+    await hooks["tool.execute.after"]!({ tool: "write", sessionID: "s1", callID: "c1", args: {} }, { title: "", output: "", metadata: {} })
+    await hooks["chat.message"]!(
+      { sessionID: "s1" },
+      { message: {} as never, parts: [{ type: "text", text: "actually, also rename it" }] as never },
+    )
+
+    const lines = fs.readFileSync(path.join(dir, ".km", "gate-outcomes.ndjson"), "utf8").trim().split("\n")
+    expect(lines).toHaveLength(1)
+    expect(JSON.parse(lines[0]!)).toMatchObject({ skippedStop: true, rounds: [], app: "opencode" })
+    expect(client.prompts).toHaveLength(0)
+
+    // Still armed: the next idle measures the edit.
+    await hooks.event!({ event: { type: "session.idle", properties: { sessionID: "s1" } } })
+    expect(client.prompts).toHaveLength(1)
+  })
+
+  // The adapter's own continuation prompt is not a skipped boundary — it must
+  // not reach the kernel at all, so it records nothing.
+  test("its own injected prompt records no skippedStop line", async () => {
+    const { hooks } = await plugin("exit 1", 2)
+    await hooks["tool.execute.after"]!({ tool: "write", sessionID: "s1", callID: "c1", args: {} }, { title: "", output: "", metadata: {} })
+    await hooks["chat.message"]!(
+      { sessionID: "s1" },
+      { message: {} as never, parts: [{ type: "text", text: `${INJECTED_MARKER} not done` }] as never },
+    )
+    expect(fs.existsSync(path.join(dir, ".km", "gate-outcomes.ndjson"))).toBe(false)
   })
 })
 
@@ -989,7 +1477,9 @@ git commit -m "test: enforce plugin manifest and installation shape"
 
 - [ ] **Step 1: Write it**
 
-Cover, in this order: what kkamak does in two sentences; `gate.json` with every field and its default (`check` required, `rounds` 2, `sensor` `.km/gate-outcomes.ndjson`, `checkTimeoutMs` 300000); that `rounds: 2` means two blocks then the third failure is allowed through; installation for Claude Code and for opencode; that the check should be cheap because it runs every time the agent finishes after an edit; the escape hatch (edit or delete `gate.json`, effective next turn, no restart); that three consecutive internal errors disarm the gate for the session; and where the sensor file lives and one example line.
+Cover, in this order: what kkamak does in two sentences; `gate.json` with every field and its default (`check` required, `rounds` 2, `sensor` `.km/gate-outcomes.ndjson`, `checkTimeoutMs` 300000); that `rounds: 2` means two blocks then the third failure is allowed through; installation for Claude Code and for opencode; that the check should be cheap because it runs every time the agent finishes after an edit; the escape hatch (edit or delete `gate.json`, effective next turn, no restart); that three consecutive internal errors disarm the gate for the session; and where the sensor file lives with one example line.
+
+Then a short "reading the sensor file" list of the fields, including the two additive ones: `checkMs` — per-round check time, which `durationMs` does not give you because a cycle's wall-clock includes agent and human wait; and `skippedStop` — a line marking a turn boundary that a queued user message consumed, so no check ran and `rounds` is empty. Say that both may be absent and that a consumer must tolerate that.
 
 Keep it under 100 lines. Do not restate the design spec.
 
@@ -1007,6 +1497,8 @@ git commit -m "docs: README"
 ---
 
 ## Self-review
+
+**Instrument lessons.** Lesson 1 (skipped-stop visibility) is implemented in Task 0's `onNewUserPrompt`, asserted at kernel level there, end-to-end for Claude Code in Task 2 Step 8, and end-to-end for opencode in Task 3. Lesson 2 (per-round check timing) is implemented in Task 0's `onStopRequested`, asserted with a clock advanced *inside* the check so cycle time and check time are provably different numbers, and surfaced in the README in Task 5. Both sensor fields are optional in `SensorLine` and omitted by `buildSensorLine` when not supplied, so no existing line or consumer changes.
 
 **Spec coverage.** The kernel spec's "harness adapters are the next step" is what this plan covers. Events in: Task 2 maps all three for Claude Code, Task 3 maps all three for opencode. Decisions out: Task 1 frames them, Task 2 emits them as a Claude Code block, Task 3 delivers them as an injected continuation. Self-containment: Task 4, plus the pre-existing import scans. Fail-open: every hook body is wrapped, and both adapter test files assert it.
 
