@@ -32,6 +32,23 @@ the day's sensor numbers, and mechanism observations the sensor stream
 cannot see (behavioral shifts, qualitative saves, instrument anomalies).
 This file is proposer evidence — keep entries factual and dated.
 
+## 2026-07-30 — adapters merged + round-1 aftermath (yoo-dev)
+
+- **Harness adapters DONE, merged, pushed** (260 tests, tsc clean): CC
+  adapter (block = refuse the stop) + opencode adapter (block = marked
+  self-injection; wedge scenarios verified); both dogfood lessons
+  (skippedStop, checkMs) implemented in the NEW kernel; import-closure
+  packaging test. Final review found 3 Important (vacuous test +
+  plan/code divergence, stderr noise, swallowed gate-notices) — all fixed
+  pre-merge. Next milestone: packaging/marketplace.
+- **Round-1 rejection reason fixed upstream** (meta-harness `19196e2` →
+  `605a407`): the leak rule's all-slashes false positive
+  ("filters/qualifies") amended — prose word/word passes, paths still
+  caught. The fix itself went through review → re-review → ruling
+  (controller's own unsubstantiated layer-2 claim caught and corrected;
+  PATH_WORDS prose collisions ruled accepted fail-closed). Reviewer loop
+  applied to the reviewer's keeper.
+
 ## 2026-07-30 — km-crank round 1 against this repo's evidence (yoo-dev, supervised)
 
 First proposer-loop run ever to ingest this repo's stream (post-baseline
