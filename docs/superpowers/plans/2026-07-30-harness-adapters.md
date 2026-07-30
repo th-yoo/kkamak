@@ -942,7 +942,7 @@ echo '{"session_id":"e2e","cwd":"/tmp/km-e2e","hook_event_name":"PostToolUse","t
 echo '{"session_id":"e2e","cwd":"/tmp/km-e2e","hook_event_name":"Stop"}' | bun $R/src/adapters/claude-code/hook-cli.ts Stop
 ```
 
-Expected: the first command prints nothing. The second prints one line of JSON containing `"decision":"block"`. Run the `Stop` command twice more: the third prints `systemMessage` with the exhausted notice, and `/tmp/km-e2e/.km/gate-outcomes.ndjson` then holds one line with `"gateExhausted":true`, `"app":"claude-code"` and a `"checkMs"` array of three numbers. Paste the actual output into your task report.
+Expected: the first command prints nothing. The second prints one line of JSON containing `"decision":"block"`. `rounds` is a budget of *blocks*, so with `rounds:1` the cycle ends on the second failing check: run the `Stop` command once more and it prints `systemMessage` with the exhausted notice, and `/tmp/km-e2e/.km/gate-outcomes.ndjson` then holds one line with `"gateExhausted":true`, `"app":"claude-code"` and a `"checkMs"` array of two numbers. Paste the actual output into your task report.
 
 Then prove the skipped-stop boundary is visible end to end — this is lesson 1, and the `UserPromptSubmit` hook is the only thing that can see it:
 
