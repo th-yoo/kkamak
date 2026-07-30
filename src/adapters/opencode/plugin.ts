@@ -39,12 +39,22 @@ export const EDIT_TOOLS: string[] = ["edit", "write", "patch", "multiedit", "app
 export const INJECTED_MARKER = "[kkamak-gate]"
 
 export function isInjectedMessage(text: string): boolean {
-  return text.includes(INJECTED_MARKER)
+  return text.trimStart().startsWith(INJECTED_MARKER)
 }
 
 export interface PluginDeps {
   client: OpencodeClient
   worktree: string
+  /** Where fail-open diagnostics go. Defaults to real stderr; tests capture this instead. */
+  log?: (line: string) => void
+}
+
+function defaultLog(line: string): void {
+  try {
+    process.stderr.write(line)
+  } catch {
+    // Nothing left to report with.
+  }
 }
 
 function textOf(parts: unknown[]): string {
@@ -58,43 +68,43 @@ function textOf(parts: unknown[]): string {
 }
 
 /** Every hook body funnels through here: a thrown error must never escape. */
-async function guarded(label: string, body: () => Promise<void>): Promise<void> {
+async function guarded(label: string, log: (line: string) => void, body: () => Promise<void>): Promise<void> {
   try {
     await body()
   } catch (err) {
-    try {
-      process.stderr.write(`kkamak: ${label} failed, allowing the session through: ${String(err)}\n`)
-    } catch {
-      // Nothing left to report with.
-    }
+    log(`kkamak: ${label} failed, allowing the session through: ${String(err)}\n`)
   }
 }
 
 export async function createKkamakPlugin(deps: PluginDeps): Promise<KkamakHooks> {
   const gate = createGate(createNodeHost({ root: deps.worktree, app: APP }))
+  const log = deps.log ?? defaultLog
 
   return {
     "tool.execute.after": (input) =>
-      guarded("tool.execute.after", async () => {
+      guarded("tool.execute.after", log, async () => {
         if (!EDIT_TOOLS.includes(input.tool.toLowerCase())) return
         await gate.handle({ kind: "file-edited", sessionId: input.sessionID })
       }),
 
     "chat.message": (input, output) =>
-      guarded("chat.message", async () => {
+      guarded("chat.message", log, async () => {
         // Our own continuation prompt must not preempt the cycle it opened.
         if (isInjectedMessage(textOf(output.parts))) return
         await gate.handle({ kind: "new-user-prompt", sessionId: input.sessionID })
       }),
 
     event: ({ event }) =>
-      guarded("session.idle", async () => {
+      guarded("session.idle", log, async () => {
         if (event?.type !== "session.idle") return
         const sessionId = event.properties?.sessionID
         if (typeof sessionId !== "string" || !sessionId) return
 
         const decision = await gate.handle({ kind: "stop-requested", sessionId })
-        if (decision.kind !== "block") return
+        if (decision.kind !== "block") {
+          if (decision.notice) log(`kkamak: ${decision.notice}\n`)
+          return
+        }
 
         const parts: PromptPart[] = [
           { type: "text", text: `${INJECTED_MARKER} ${composeBlockMessage(decision)}` },

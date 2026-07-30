@@ -117,6 +117,25 @@ describe("the self-prompt trap", () => {
     expect(isInjectedMessage("please add a test")).toBe(false)
   })
 
+  // The adapter only ever injects the marker as a leading prefix. A human who
+  // merely quotes it mid-message must not be mistaken for the adapter's own
+  // continuation prompt.
+  test("a human message that quotes the marker mid-sentence is not self-injected", async () => {
+    const text = "someone pasted [kkamak-gate] into chat"
+    expect(isInjectedMessage(text)).toBe(false)
+
+    // And it must actually reach the kernel: it should cancel the open cycle,
+    // just like any other real human message.
+    const { hooks, client } = await plugin("exit 1", 2)
+    await hooks["tool.execute.after"]!({ tool: "write", sessionID: "s1", callID: "c1", args: {} }, { title: "", output: "", metadata: {} })
+    await hooks.event!({ event: { type: "session.idle", properties: { sessionID: "s1" } } })
+
+    await hooks["chat.message"]!({ sessionID: "s1" }, { message: {} as never, parts: [{ type: "text", text }] as never })
+
+    await hooks.event!({ event: { type: "session.idle", properties: { sessionID: "s1" } } })
+    expect(client.prompts).toHaveLength(1) // stood down; no second block
+  })
+
   test("its own injected prompt does not cancel the open cycle", async () => {
     const { hooks, client } = await plugin("exit 1", 2)
     await hooks["tool.execute.after"]!({ tool: "write", sessionID: "s1", callID: "c1", args: {} }, { title: "", output: "", metadata: {} })
@@ -185,16 +204,19 @@ describe("skipped stop boundary", () => {
 })
 
 describe("fail-open", () => {
-  test("a client that cannot inject does not throw out of the hook", async () => {
+  test("a client that cannot inject does not throw out of the hook, and logs why", async () => {
     writeConfig("exit 1")
+    const logged: string[] = []
     const hooks = await createKkamakPlugin({
       client: { session: { promptAsync: async () => { throw new Error("offline") } } } as never,
       worktree: dir,
+      log: (line) => logged.push(line),
     })
     await hooks["tool.execute.after"]!({ tool: "write", sessionID: "s1", callID: "c1", args: {} }, { title: "", output: "", metadata: {} })
     await expect(
       hooks.event!({ event: { type: "session.idle", properties: { sessionID: "s1" } } }),
     ).resolves.toBeUndefined()
+    expect(logged.some((l) => l.includes("session.idle failed") && l.includes("offline"))).toBe(true)
   })
 
   test("a repo with no gate.json is inert", async () => {
@@ -209,5 +231,24 @@ describe("fail-open", () => {
   test("a malformed event does not throw", async () => {
     const { hooks } = await plugin()
     await expect(hooks.event!({ event: {} as never })).resolves.toBeUndefined()
+  })
+})
+
+// An "allow" decision can still carry a notice (gate exhausted, gate disarmed,
+// an unwritable .km/) that the human needs to see. It must never be silently
+// dropped, but it also must not be injected as a continuation message — a
+// notice is diagnostic, not a reason to keep the session going.
+describe("notices on non-block decisions", () => {
+  test("a notice from an exhausted gate is logged, not injected as a continuation", async () => {
+    writeConfig("exit 1", 0) // rounds: 0 -> the very first failure exhausts the gate
+    const client = fakeClient()
+    const logged: string[] = []
+    const hooks = await createKkamakPlugin({ client: client as never, worktree: dir, log: (line) => logged.push(line) })
+
+    await hooks["tool.execute.after"]!({ tool: "write", sessionID: "s1", callID: "c1", args: {} }, { title: "", output: "", metadata: {} })
+    await hooks.event!({ event: { type: "session.idle", properties: { sessionID: "s1" } } })
+
+    expect(client.prompts).toHaveLength(0)
+    expect(logged.some((l) => l.includes("gate exhausted"))).toBe(true)
   })
 })
