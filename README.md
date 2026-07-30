@@ -13,6 +13,8 @@ Drop a `gate.json` in the repo root. Every field but `check` is optional:
 | `sensor`         | no       | `.km/gate-outcomes.ndjson`   | Where outcome lines are appended, relative to the repo root. |
 | `checkTimeoutMs` | no       | `300000` (5 minutes)         | Hard cap on one check run; a check that runs past this is killed and counted as a failed round. |
 
+Under Claude Code, keep `checkTimeoutMs` under 600000 (600s): the `Stop` hook in `hooks/hooks.json` has its own 600s timeout, and if that fires first, Claude Code kills the hook process before the gate ever gets to record a decision — fail-open still holds (no state written, no round consumed), but the check silently never gets its full configured time.
+
 Example:
 
 ```json

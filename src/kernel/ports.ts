@@ -53,15 +53,22 @@ export interface SensorLine {
   accepted: boolean
   /** True when the rounds budget ran out rather than the check passing. */
   gateExhausted: boolean
-  /** True when a new user prompt preempted an open cycle. */
+  /**
+   * True when a new user prompt preempted an open cycle, OR when it arrived
+   * on an armed-but-never-cycled session (see `skippedStop`) — in both cases
+   * a prompt is why this line exists rather than a stop.
+   */
   interrupted: boolean
   rounds: RoundOutcome[]
   durationMs: number
   host: string
   app: string
   /**
-   * Per-round check execution time in ms, parallel to `rounds`. Optional: lines
-   * written before this field existed do not carry it.
+   * Per-round check execution time in ms, parallel to `rounds` — except for
+   * a cycle already in flight when this field was introduced, whose
+   * `checkMs` starts empty and so can be shorter than `rounds` for that one
+   * straddling cycle. Optional: lines written before this field existed do
+   * not carry it at all.
    */
   checkMs?: number[]
   /**

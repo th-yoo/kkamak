@@ -46,7 +46,7 @@ export function parseHookInput(raw: string, eventName: string): ParsedHookInput 
     case "PostToolUse": {
       const tool = record.tool_name
       if (typeof tool !== "string") return undefined
-      if (!(EDIT_TOOLS as readonly string[]).includes(tool)) return undefined
+      if (!EDIT_TOOLS.includes(tool)) return undefined
       return { event: { kind: "file-edited", sessionId }, root }
     }
     default:
