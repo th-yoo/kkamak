@@ -19,6 +19,15 @@ export const SENSOR_FIELDS = [
   "app",
 ] as const satisfies readonly (keyof SensorLine)[]
 
+/**
+ * Additive fields. Emitted only when the gate has something to say with them,
+ * so every existing line and every existing consumer is unaffected.
+ */
+export const OPTIONAL_SENSOR_FIELDS = [
+  "checkMs",
+  "skippedStop",
+] as const satisfies readonly (keyof SensorLine)[]
+
 export interface SensorArgs {
   sessionId: string
   check: string
@@ -27,6 +36,8 @@ export interface SensorArgs {
   interrupted: boolean
   rounds: RoundOutcome[]
   durationMs: number
+  checkMs?: number[]
+  skippedStop?: boolean
 }
 
 /**
@@ -34,7 +45,7 @@ export interface SensorArgs {
  * kernel constant — that is what keeps this kernel harness-abstract.
  */
 export function buildSensorLine(info: HostInfo, clock: Clock, args: SensorArgs): SensorLine {
-  return {
+  const line: SensorLine = {
     ts: clock.now(),
     sessionId: args.sessionId,
     check: args.check,
@@ -48,4 +59,9 @@ export function buildSensorLine(info: HostInfo, clock: Clock, args: SensorArgs):
     host: info.host,
     app: info.app,
   }
+  // Additive fields last, so the leading columns of the NDJSON stay where a
+  // human's eye expects them.
+  if (args.checkMs) line.checkMs = [...args.checkMs]
+  if (args.skippedStop) line.skippedStop = true
+  return line
 }

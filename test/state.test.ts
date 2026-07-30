@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { INITIAL_STATE, isGateState, isInitialState } from "../src/kernel/state.ts"
+import { INITIAL_STATE, isGateState, isInitialState, normalizeGateState } from "../src/kernel/state.ts"
 import type { GateState } from "../src/kernel/ports.ts"
 
 describe("INITIAL_STATE", () => {
@@ -10,6 +10,7 @@ describe("INITIAL_STATE", () => {
       gating: false,
       round: 0,
       outcomes: [],
+      checkMs: [],
       cycleStartedAt: 0,
       errorStreak: 0,
       disarmed: false,
@@ -74,4 +75,33 @@ describe("isGateState", () => {
   ])("rejects %s", (_label, value) => {
     expect(isGateState(value)).toBe(false)
   })
+})
+
+test("initial state has no round times", () => {
+  expect(INITIAL_STATE.checkMs).toEqual([])
+  expect(isInitialState({ ...INITIAL_STATE })).toBe(true)
+})
+
+test("recorded round times mean the state is not initial", () => {
+  expect(isInitialState({ ...INITIAL_STATE, checkMs: [5] })).toBe(false)
+})
+
+test("a record written before checkMs existed is still valid, not corrupt", () => {
+  const legacy: Record<string, unknown> = { ...INITIAL_STATE, edited: true }
+  delete legacy.checkMs
+  expect(isGateState(legacy)).toBe(true)
+  expect(normalizeGateState(legacy as unknown as GateState).checkMs).toEqual([])
+  expect(normalizeGateState(legacy as unknown as GateState).edited).toBe(true)
+})
+
+test("a non-numeric checkMs is corrupt", () => {
+  expect(isGateState({ ...INITIAL_STATE, checkMs: ["x"] })).toBe(false)
+  expect(isGateState({ ...INITIAL_STATE, checkMs: "5" })).toBe(false)
+})
+
+test("normalising copies the arrays, so a loaded record cannot alias state", () => {
+  const source = { ...INITIAL_STATE, outcomes: ["failed" as const], checkMs: [7] }
+  const copy = normalizeGateState(source)
+  expect(copy.outcomes).not.toBe(source.outcomes)
+  expect(copy.checkMs).not.toBe(source.checkMs)
 })

@@ -13,6 +13,8 @@ import type {
 export class FakeCheck {
   readonly calls: { command: string; timeoutMs: number }[] = []
   private script: (CheckResult | Error)[]
+  /** Lets a test advance a fake clock *during* the check, so per-round timing is observable. */
+  onRun?: () => void
   /** Used once the script runs dry, so tests only script what they care about. */
   constructor(script: (CheckResult | Error)[], private readonly fallback: CheckResult | Error = { code: 0, output: "" }) {
     this.script = [...script]
@@ -20,6 +22,7 @@ export class FakeCheck {
 
   async run(command: string, timeoutMs: number): Promise<CheckResult> {
     this.calls.push({ command, timeoutMs })
+    this.onRun?.()
     const next = this.script.shift() ?? this.fallback
     if (next instanceof Error) throw next
     return next
@@ -81,6 +84,10 @@ export class FakeClock {
   }
   set(t: number): void {
     this.t = t
+  }
+  /** Reads the current time without advancing, for tests that compute offsets. */
+  peek(): number {
+    return this.t
   }
 }
 

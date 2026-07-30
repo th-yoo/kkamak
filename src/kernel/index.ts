@@ -25,5 +25,5 @@ export {
   DEFAULT_SENSOR_PATH,
   parseGateConfig,
 } from "./config.ts"
-export { INITIAL_STATE, isGateState, isInitialState } from "./state.ts"
-export { buildSensorLine, SENSOR_FIELDS, type SensorArgs } from "./sensor.ts"
+export { INITIAL_STATE, isGateState, isInitialState, normalizeGateState } from "./state.ts"
+export { buildSensorLine, OPTIONAL_SENSOR_FIELDS, SENSOR_FIELDS, type SensorArgs } from "./sensor.ts"

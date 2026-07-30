@@ -267,7 +267,7 @@ describe("a new user prompt preempts the gate", () => {
     await gate.handle(edit)
     await gate.handle(prompt)
     expect(h.store.peek(SESSION)?.edited).toBe(true)
-    expect(h.sensor.lines).toHaveLength(0)
+    expect(h.sensor.lines).toHaveLength(1)
     expect(await gate.handle(stop)).toMatchObject({ kind: "block" })
   })
 
@@ -528,5 +528,132 @@ describe("a block that cannot be recorded is not a block", () => {
     const gate = createGate(h.host)
     await gate.handle(stop)
     expect(h.logger.messages.join("\n")).toContain("ENOSPC")
+  })
+})
+
+// A queued user message can consume the turn boundary, so the harness never
+// delivers a stop and the edits go unmeasured. Silence there is the blind spot.
+describe("a skipped stop boundary is visible", () => {
+  test("records a diagnostic line when a prompt arrives on an armed session", async () => {
+    const h = makeHarness({ fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    expect(await gate.handle(prompt)).toEqual({ kind: "allow" })
+
+    expect(h.sensor.lines).toHaveLength(1)
+    expect(h.sensor.lines[0]).toMatchObject({
+      sessionId: SESSION,
+      check: "bun test",
+      skippedStop: true,
+      rounds: [],
+      checkMs: [],
+      gateExhausted: false,
+    })
+    expect(h.check.calls).toHaveLength(0) // no check ran: there was no stop
+  })
+
+  test("leaves the session armed, so the next real stop still measures", async () => {
+    const h = makeHarness({ fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(prompt)
+
+    expect(h.store.peek(SESSION)?.edited).toBe(true)
+    expect(await gate.handle(stop)).toMatchObject({ kind: "block", round: 1 })
+  })
+
+  test("every skipped boundary is recorded, not just the first", async () => {
+    const h = makeHarness({ fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(prompt)
+    await gate.handle(prompt)
+    expect(h.sensor.lines).toHaveLength(2)
+    expect(h.sensor.lines.every((l) => l.skippedStop === true)).toBe(true)
+  })
+
+  test("an interrupted open cycle is still reported as interrupted, not skipped", async () => {
+    const h = makeHarness({ fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    await gate.handle(prompt)
+    expect(h.sensor.lines).toHaveLength(1)
+    expect(h.sensor.lines[0]?.interrupted).toBe(true)
+    expect(h.sensor.lines[0]?.skippedStop).toBeUndefined()
+    expect(h.sensor.lines[0]?.rounds).toEqual(["failed"])
+  })
+
+  test("no config means no sensor path, so nothing is recorded", async () => {
+    const h = makeHarness({ fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    h.config.raw = undefined
+    expect(await gate.handle(prompt)).toEqual({ kind: "allow" })
+    expect(h.sensor.lines).toHaveLength(0)
+  })
+})
+
+// Cycle durationMs includes agent and human wait time: an observed 420s cycle
+// ran a ~1s check. Check cost has to be measurable on its own.
+describe("per-round check timing", () => {
+  test("times the check runner, not the whole cycle", async () => {
+    const clock = new FakeClock(1_000, 0)
+    const h = makeHarness({ raw: '{"check":"x","rounds":1}', fallback: FAIL, clock })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+
+    // Round 1: the check itself takes 300ms.
+    h.check.onRun = () => clock.set(clock.peek() + 300)
+    await gate.handle(stop)
+
+    // …then the agent and the human take 100s before the next stop.
+    clock.set(101_300)
+    h.check.onRun = () => clock.set(clock.peek() + 400)
+    await gate.handle(stop)
+
+    const line = h.sensor.lines[0]!
+    expect(line.checkMs).toEqual([300, 400])
+    expect(line.durationMs).toBeGreaterThan(100_000) // cycle time still recorded
+  })
+
+  test("one entry per round, parallel to rounds, on a passing cycle", async () => {
+    const h = makeHarness({ script: [FAIL, PASS] })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    await gate.handle(stop)
+
+    const line = h.sensor.lines[0]!
+    expect(line.rounds).toEqual(["failed", "passed"])
+    expect(line.checkMs).toHaveLength(2)
+    expect(line.checkMs?.every((ms) => typeof ms === "number" && ms >= 0)).toBe(true)
+  })
+
+  test("accumulates across the rounds of an exhausted cycle", async () => {
+    const h = makeHarness({ fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    await gate.handle(stop)
+    await gate.handle(stop)
+    expect(h.sensor.lines[0]?.checkMs).toHaveLength(3)
+  })
+
+  test("an interrupted cycle reports the rounds it did time", async () => {
+    const h = makeHarness({ fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    await gate.handle(prompt)
+    expect(h.sensor.lines[0]?.checkMs).toHaveLength(1)
+  })
+
+  test("a check that could not run consumes no round and times nothing", async () => {
+    const h = makeHarness({ fallback: new Error("spawn ENOENT") })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    expect(h.store.peek(SESSION)?.checkMs).toEqual([])
   })
 })

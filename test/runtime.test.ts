@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { SpawnCheckRunner } from "../src/runtime/check-runner.ts"
 import { FileConfigSource } from "../src/runtime/config-source.ts"
-import { FileStateStore } from "../src/runtime/file-state-store.ts"
+import { FileStateStore, recordName } from "../src/runtime/file-state-store.ts"
 import { NdjsonSensorSink } from "../src/runtime/ndjson-sink.ts"
 import { createNodeHost } from "../src/runtime/index.ts"
 import { INITIAL_STATE } from "../src/kernel/state.ts"
@@ -180,6 +180,25 @@ describe("FileStateStore", () => {
     s.save("a:b", { ...INITIAL_STATE, edited: true, round: 2 })
     expect(s.load("a/b").round).toBe(1)
     expect(s.load("a:b").round).toBe(2)
+  })
+
+  test("round times survive a save/load round trip", () => {
+    const store = new FileStateStore(dir)
+    store.save("s", { ...INITIAL_STATE, edited: true, gating: true, round: 1, outcomes: ["failed"], checkMs: [1_234] })
+    expect(store.load("s").checkMs).toEqual([1_234])
+  })
+
+  // A session in flight across an upgrade must not lose its armed state.
+  test("a record written before checkMs existed loads as armed with no round times", () => {
+    const store = new FileStateStore(dir)
+    const legacy: Record<string, unknown> = { ...INITIAL_STATE, edited: true }
+    delete legacy.checkMs
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, `${recordName("s")}.json`), JSON.stringify(legacy))
+
+    const loaded = store.load("s")
+    expect(loaded.edited).toBe(true)
+    expect(loaded.checkMs).toEqual([])
   })
 })
 

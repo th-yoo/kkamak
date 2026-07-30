@@ -82,7 +82,27 @@ function onNewUserPrompt(
   state: GateState,
   config: GateConfig | undefined,
 ): GateDecision {
-  if (!state.gating) return ALLOW
+  if (!state.gating) {
+    // A queued prompt can consume the turn boundary, so the harness never
+    // delivers a stop: the check never runs and the edits go unmeasured. Say so
+    // rather than dropping the boundary silently. State is left untouched — the
+    // session stays armed, so the next real stop measures the edits
+    // cumulatively.
+    if (config && state.edited) {
+      record(host, config.sensor, {
+        sessionId,
+        check: config.check,
+        accepted: true,
+        gateExhausted: false,
+        interrupted: true,
+        skippedStop: true,
+        rounds: [],
+        checkMs: [],
+        durationMs: 0,
+      })
+    }
+    return ALLOW
+  }
 
   if (config) {
     record(host, config.sensor, {
@@ -92,6 +112,7 @@ function onNewUserPrompt(
       gateExhausted: true,
       interrupted: true,
       rounds: state.outcomes,
+      checkMs: state.checkMs,
       durationMs: elapsed(host, state.cycleStartedAt),
     })
   }
@@ -119,6 +140,7 @@ async function onStopRequested(
 
   const startedAt = state.gating ? state.cycleStartedAt : host.clock.now()
 
+  const checkStartedAt = host.clock.now()
   let result: CheckResult
   try {
     result = await host.check.run(config.check, config.checkTimeoutMs)
@@ -128,6 +150,11 @@ async function onStopRequested(
   } catch (err) {
     return onInternalError(host, sessionId, state, err)
   }
+
+  // Measured around the runner only. `durationMs` spans the whole cycle and so
+  // includes agent think time, subagent runs and human wait; a 420s cycle can
+  // be a 1s check, and the two numbers answer different questions.
+  const checkMs = [...state.checkMs, host.clock.now() - checkStartedAt]
 
   const outcome: RoundOutcome = result.code === 0 ? "passed" : "failed"
   const outcomes = [...state.outcomes, outcome]
@@ -140,6 +167,7 @@ async function onStopRequested(
       gateExhausted: false,
       interrupted: false,
       rounds: outcomes,
+      checkMs,
       durationMs: elapsed(host, startedAt),
     })
     persist(host, sessionId, { ...INITIAL_STATE })
@@ -154,6 +182,7 @@ async function onStopRequested(
       gating: true,
       round,
       outcomes,
+      checkMs,
       cycleStartedAt: startedAt,
       // A real verdict, pass or fail, proves the runner works.
       errorStreak: 0,
@@ -182,6 +211,7 @@ async function onStopRequested(
     gateExhausted: true,
     interrupted: false,
     rounds: outcomes,
+    checkMs,
     durationMs: elapsed(host, startedAt),
   })
   persist(host, sessionId, { ...INITIAL_STATE })

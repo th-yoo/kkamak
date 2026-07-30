@@ -19,6 +19,11 @@ export interface GateState {
   /** Blocks issued in the open cycle. */
   round: number
   outcomes: RoundOutcome[]
+  /**
+   * Wall-clock ms of each round's check run, parallel to `outcomes`. Cycle
+   * duration includes agent and human wait time; this does not.
+   */
+  checkMs: number[]
   cycleStartedAt: number
   /** Consecutive internal errors (check crashed, not check failed). */
   errorStreak: number
@@ -54,6 +59,17 @@ export interface SensorLine {
   durationMs: number
   host: string
   app: string
+  /**
+   * Per-round check execution time in ms, parallel to `rounds`. Optional: lines
+   * written before this field existed do not carry it.
+   */
+  checkMs?: number[]
+  /**
+   * Present and true only on a diagnostic line: a new user prompt consumed the
+   * turn boundary while the session was armed, so no stop was ever delivered
+   * and no check ran. `rounds` is empty on such a line.
+   */
+  skippedStop?: boolean
 }
 
 // ── Events in ───────────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { buildSensorLine, SENSOR_FIELDS } from "../src/kernel/sensor.ts"
+import { buildSensorLine, OPTIONAL_SENSOR_FIELDS, SENSOR_FIELDS } from "../src/kernel/sensor.ts"
 import type { HostInfo, SensorLine } from "../src/kernel/ports.ts"
 
 const info: HostInfo = { app: "opencode", host: "test-host" }
@@ -105,5 +105,57 @@ describe("buildSensorLine", () => {
   test("handles an empty rounds array", () => {
     const line = buildSensorLine(info, clock, { ...base, rounds: [] })
     expect(line.rounds).toEqual([])
+  })
+})
+
+describe("additive fields", () => {
+  test("declares the two optional fields", () => {
+    expect([...OPTIONAL_SENSOR_FIELDS].sort()).toEqual(["checkMs", "skippedStop"])
+  })
+
+  // Existing consumers must not have to learn a new field to keep working.
+  test("omits both when not supplied, so an ordinary line is unchanged", () => {
+    const line = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds] })
+    expect(Object.keys(line).sort()).toEqual([...SENSOR_FIELDS].sort())
+    expect("checkMs" in line).toBe(false)
+    expect("skippedStop" in line).toBe(false)
+  })
+
+  test("carries per-round check times parallel to rounds", () => {
+    const line = buildSensorLine(info, clock, {
+      ...base,
+      rounds: ["failed", "passed"],
+      checkMs: [1_200, 900],
+    })
+    expect(line.checkMs).toEqual([1_200, 900])
+    expect(line.checkMs).toHaveLength(line.rounds.length)
+  })
+
+  test("copies checkMs, like rounds, so later mutation cannot rewrite history", () => {
+    const checkMs = [10]
+    const line = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds], checkMs })
+    checkMs.push(20)
+    expect(line.checkMs).toEqual([10])
+  })
+
+  test("keeps an empty checkMs, which is meaningful on a skipped-stop line", () => {
+    const line = buildSensorLine(info, clock, { ...base, rounds: [], checkMs: [] })
+    expect(line.checkMs).toEqual([])
+  })
+
+  test("marks a skipped stop", () => {
+    const line = buildSensorLine(info, clock, { ...base, rounds: [], skippedStop: true })
+    expect(line.skippedStop).toBe(true)
+  })
+
+  test("a skipped-stop line survives a JSON round trip", () => {
+    const line = buildSensorLine(info, clock, {
+      ...base,
+      rounds: [],
+      checkMs: [],
+      skippedStop: true,
+    })
+    expect(JSON.parse(JSON.stringify(line))).toEqual(line)
+    expect(JSON.stringify(line)).not.toContain("\n")
   })
 })

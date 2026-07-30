@@ -6,6 +6,7 @@ export const INITIAL_STATE: GateState = {
   gating: false,
   round: 0,
   outcomes: [],
+  checkMs: [],
   cycleStartedAt: 0,
   errorStreak: 0,
   disarmed: false,
@@ -24,6 +25,9 @@ export function isInitialState(s: GateState): boolean {
     !s.gating &&
     s.round === 0 &&
     s.outcomes.length === 0 &&
+    // Optional-chained on purpose: a record written before this field existed
+    // reaches this function with it missing.
+    !s.checkMs?.length &&
     s.cycleStartedAt === 0 &&
     s.errorStreak === 0 &&
     !s.disarmed
@@ -48,6 +52,16 @@ export function isGateState(x: unknown): x is GateState {
     typeof s.disarmed === "boolean" &&
     typeof s.updatedAt === "number" &&
     Array.isArray(s.outcomes) &&
-    s.outcomes.every((o) => typeof o === "string" && OUTCOMES.includes(o))
+    s.outcomes.every((o) => typeof o === "string" && OUTCOMES.includes(o)) &&
+    (s.checkMs === undefined ||
+      (Array.isArray(s.checkMs) && s.checkMs.every((ms) => typeof ms === "number")))
   )
+}
+
+/**
+ * Fills in fields added after a record was written and copies its arrays, so a
+ * loaded record can never alias — or be missing — what the kernel then spreads.
+ */
+export function normalizeGateState(s: GateState): GateState {
+  return { ...s, outcomes: [...s.outcomes], checkMs: [...(s.checkMs ?? [])] }
 }

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
-import { INITIAL_STATE, isGateState, isInitialState } from "../kernel/state.ts"
+import { INITIAL_STATE, isGateState, isInitialState, normalizeGateState } from "../kernel/state.ts"
 import type { GateState, StateStore } from "../kernel/ports.ts"
 
 /**
@@ -27,7 +27,7 @@ export class FileStateStore implements StateStore {
 
     try {
       const parsed: unknown = JSON.parse(raw)
-      return isGateState(parsed) ? parsed : { ...INITIAL_STATE }
+      return isGateState(parsed) ? normalizeGateState(parsed) : { ...INITIAL_STATE }
     } catch {
       return { ...INITIAL_STATE }
     }
