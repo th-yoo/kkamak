@@ -81,15 +81,25 @@ const allSources = [
   ...sourceFiles(path.join(PACKAGE_ROOT, "src")),
   ...sourceFiles(path.join(PACKAGE_ROOT, "test")),
 ]
-const SELF_FILE = path.resolve(import.meta.path)
-// This file's own fixtures below necessarily contain realistic import/require
-// syntax as string literals (that is the point of testing classifyImport and
-// COMPUTED_CALL_PATTERN against them). The regex-based importsIn scan cannot
-// tell those literals apart from real source, so its matches against this
-// file are dropped from the real-tree checks — the same self-exclusion
-// already applied, for the same reason, by the computed-specifier scan below.
-const allImports = allSources.flatMap(importsIn).filter((ref) => path.resolve(ref.file) !== SELF_FILE)
+const allImports = allSources.flatMap(importsIn)
 const kernelSources = sourceFiles(KERNEL_DIR)
+
+// Fixture strings that must contain realistic import/require call syntax (to
+// prove COMPUTED_CALL_PATTERN both flags and does not flag the right shapes)
+// live in a .json file rather than inline here: sourceFiles() only scans
+// .ts/.tsx/.mts/.cts/.js/.mjs/.cjs, so a .json fixture never enters
+// allSources/allImports and cannot pollute the real-tree scans above with
+// matches against this file's own text. (A prior version kept these inline
+// and instead filtered this file's own matches out of allImports by identity;
+// that filter was broader than the problem — it would also have hidden a
+// genuine violation in this file's real code. Keeping the fixture text out of
+// the scanned corpus in the first place removes the exclusion entirely.)
+const callFixtures = JSON.parse(
+  fs.readFileSync(path.join(PACKAGE_ROOT, "test", "import-scan-fixtures.json"), "utf8"),
+) as {
+  computedCallsThatShouldBeFlagged: [string, string][]
+  literalCallsThatShouldNotBeFlagged: [string, string][]
+}
 
 function rel(file: string): string {
   return path.relative(PACKAGE_ROOT, file)
@@ -252,20 +262,17 @@ describe("the scan detects violations it is meant to catch", () => {
     expect(classifyImport(KERNEL_FILE, "../kernel-extras/x.ts", KERNEL_DIR)).toBe("escapes")
   })
 
-  test.each([
-    ["a computed require", "require(computedPath)"],
-    ["a computed dynamic import", "import(computedPath)"],
-    ["a concatenated dynamic import", 'import("./" + externalPath)'],
-    ["a template dynamic import", "import(`./${name}.ts`)"],
-  ])("flags %s as an unresolvable specifier", (_label, source) => {
-    expect(source).toMatch(COMPUTED_CALL_PATTERN)
-  })
+  test.each(callFixtures.computedCallsThatShouldBeFlagged)(
+    "flags %s as an unresolvable specifier",
+    (_label, source) => {
+      expect(source).toMatch(COMPUTED_CALL_PATTERN)
+    },
+  )
 
-  test.each([
-    ['a literal import', 'import x from "./a.ts"'],
-    ['a literal require', 'require("node:fs")'],
-    ['a literal dynamic import', 'const m = await import("./b.ts")'],
-  ])("does not flag %s", (_label, source) => {
-    expect(source).not.toMatch(COMPUTED_CALL_PATTERN)
-  })
+  test.each(callFixtures.literalCallsThatShouldNotBeFlagged)(
+    "does not flag %s",
+    (_label, source) => {
+      expect(source).not.toMatch(COMPUTED_CALL_PATTERN)
+    },
+  )
 })

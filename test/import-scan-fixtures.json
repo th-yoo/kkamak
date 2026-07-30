@@ -1,0 +1,13 @@
+{
+  "computedCallsThatShouldBeFlagged": [
+    ["a computed require", "require(computedPath)"],
+    ["a computed dynamic import", "import(computedPath)"],
+    ["a concatenated dynamic import", "import(\"./\" + externalPath)"],
+    ["a template dynamic import", "import(`./${name}.ts`)"]
+  ],
+  "literalCallsThatShouldNotBeFlagged": [
+    ["a literal import", "import x from \"./a.ts\""],
+    ["a literal require", "require(\"node:fs\")"],
+    ["a literal dynamic import", "const m = await import(\"./b.ts\")"]
+  ]
+}
