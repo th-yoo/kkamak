@@ -32,6 +32,36 @@ the day's sensor numbers, and mechanism observations the sensor stream
 cannot see (behavioral shifts, qualitative saves, instrument anomalies).
 This file is proposer evidence — keep entries factual and dated.
 
+## 2026-07-31 — opencode adapter wired to deliver the hygiene marker (yoo-dev)
+
+Closes the opencode gap the CC-adapter entry below left open: both
+adapters now deliver `GateDecision.marker`.
+
+- **opencode — wired**, symmetric with the CC delivery split (steered
+  explicitly: marker and notice stay on separate channels, never
+  merged). `plugin.ts`'s `session.idle` handler now injects a continuation
+  prompt (`INJECTED_MARKER`-prefixed, same mechanism a block uses — opencode
+  has no hook-return channel like Claude Code's `hookSpecificOutput`, so
+  continuing the session is the only way to feed the model's context) when
+  `decision.marker` is set. `decision.notice` still only ever logs, as
+  before; the two `if`s are independent, so neither branch can leak into
+  the other's channel.
+- Never fires on exhaustion under opencode either — proven with
+  `marker:true, rounds:0` driven to a real exhaustion, not assumed from
+  the kernel-level test already covering this.
+- The injected marker prompt lands after the accept branch has already
+  reset session state to `INITIAL_STATE`, so replaying it back through
+  `chat.message` is inert (no `skippedStop` line, no new gate line) —
+  pinned down by a test rather than left as an unverified consequence of
+  the reset-before-injecting order.
+- Suite: 287 → 291 (4 new: prompt delivery + text, off-by-default,
+  exhaustion override, self-injected-replay inertness). `bunx tsc --noEmit`
+  clean. Golden fixture untouched — same as the CC-adapter entry, this
+  never touches sensor-line shape.
+- README: both adapters' delivery channels for `marker` now documented in
+  one place (the sensor-file section) instead of the CC-only note the
+  prior entry left.
+
 ## 2026-07-31 — CC adapter wired to deliver the hygiene marker (yoo-dev)
 
 Follow-on to the `marker` milestone below: that commit (`65c9546`) left

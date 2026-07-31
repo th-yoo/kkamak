@@ -102,7 +102,17 @@ export async function createKkamakPlugin(deps: PluginDeps): Promise<KkamakHooks>
 
         const decision = await gate.handle({ kind: "stop-requested", sessionID })
         if (decision.kind !== "block") {
+          // notice and marker are separate channels, same split as the
+          // Claude Code adapter's planEmit: notice is diagnostic (log only,
+          // never injected); marker is meant for the agent's own context, so
+          // it can only reach the model by continuing the session (injected
+          // only, never logged) — opencode has no other channel to feed
+          // context back in. See GateDecision's doc comment.
           if (decision.notice) log(`kkamak: ${decision.notice}\n`)
+          if (decision.marker) {
+            const parts: PromptPart[] = [{ type: "text", text: `${INJECTED_MARKER} ${decision.marker}` }]
+            await deps.client.session.promptAsync({ path: { id: sessionID }, body: { parts } })
+          }
           return
         }
 

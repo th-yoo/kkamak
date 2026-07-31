@@ -8,6 +8,7 @@ import {
   INJECTED_MARKER,
   isInjectedMessage,
 } from "../src/adapters/opencode/plugin.ts"
+import { HYGIENE_MARKER } from "../src/kernel/index.ts"
 
 let dir: string
 
@@ -19,8 +20,8 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
-function writeConfig(check: string, rounds = 2): void {
-  fs.writeFileSync(path.join(dir, "gate.json"), JSON.stringify({ check, rounds }))
+function writeConfig(check: string, rounds = 2, marker = false): void {
+  fs.writeFileSync(path.join(dir, "gate.json"), JSON.stringify({ check, rounds, marker }))
 }
 
 /** Records every prompt the adapter injects. */
@@ -250,5 +251,71 @@ describe("notices on non-block decisions", () => {
 
     expect(client.prompts).toHaveLength(0)
     expect(logged.some((l) => l.includes("gate exhausted"))).toBe(true)
+  })
+})
+
+// Symmetric with the Claude Code adapter's delivery split (emit.ts's
+// planEmit): notice and marker are separate channels. notice is diagnostic
+// (log only, per the describe block above); marker is meant for the agent's
+// own context, so it can only reach the model by continuing the session —
+// same injection mechanism a block uses, never the log.
+describe("hygiene marker delivery", () => {
+  test("injects a continuation prompt carrying the hygiene notice", async () => {
+    writeConfig("exit 0", 2, true) // marker:true, clean accept
+    const client = fakeClient()
+    const logged: string[] = []
+    const hooks = await createKkamakPlugin({ client: client as never, worktree: dir, log: (line) => logged.push(line) })
+
+    await hooks["tool.execute.after"]!({ tool: "write", sessionID: "s1", callID: "c1", args: {} }, { title: "", output: "", metadata: {} })
+    await hooks.event!({ event: { type: "session.idle", properties: { sessionID: "s1" } } })
+
+    expect(client.prompts).toHaveLength(1)
+    expect(client.prompts[0]!.id).toBe("s1")
+    expect(client.prompts[0]!.text).toContain(INJECTED_MARKER)
+    expect(client.prompts[0]!.text).toContain(HYGIENE_MARKER)
+    // Never logged — only injected, the opposite channel from a notice.
+    expect(logged.some((l) => l.includes(HYGIENE_MARKER))).toBe(false)
+  })
+
+  test("off by default: a clean accept injects nothing", async () => {
+    const { hooks, client } = await plugin("exit 0") // marker defaults false via writeConfig
+    await hooks["tool.execute.after"]!({ tool: "write", sessionID: "s1", callID: "c1", args: {} }, { title: "", output: "", metadata: {} })
+    await hooks.event!({ event: { type: "session.idle", properties: { sessionID: "s1" } } })
+    expect(client.prompts).toHaveLength(0)
+  })
+
+  test("never fires on exhaustion, even with the toggle on", async () => {
+    writeConfig("exit 1", 0, true) // marker:true, rounds:0 -> exhausts on the first failure
+    const client = fakeClient()
+    const logged: string[] = []
+    const hooks = await createKkamakPlugin({ client: client as never, worktree: dir, log: (line) => logged.push(line) })
+
+    await hooks["tool.execute.after"]!({ tool: "write", sessionID: "s1", callID: "c1", args: {} }, { title: "", output: "", metadata: {} })
+    await hooks.event!({ event: { type: "session.idle", properties: { sessionID: "s1" } } })
+
+    expect(client.prompts).toHaveLength(0)
+    expect(logged.some((l) => l.includes("gate exhausted"))).toBe(true)
+  })
+
+  // The injected marker text lands after state has already reset to
+  // INITIAL_STATE (the accept branch resets before returning), so replaying
+  // it back through chat.message must be inert either way — this pins that
+  // down rather than assuming it.
+  test("its own injected marker prompt records nothing if replayed", async () => {
+    writeConfig("exit 0", 2, true)
+    const client = fakeClient()
+    const hooks = await createKkamakPlugin({ client: client as never, worktree: dir })
+
+    await hooks["tool.execute.after"]!({ tool: "write", sessionID: "s1", callID: "c1", args: {} }, { title: "", output: "", metadata: {} })
+    await hooks.event!({ event: { type: "session.idle", properties: { sessionID: "s1" } } })
+    expect(client.prompts).toHaveLength(1)
+
+    await hooks["chat.message"]!(
+      { sessionID: "s1" },
+      { message: {} as never, parts: [{ type: "text", text: client.prompts[0]!.text }] as never },
+    )
+
+    const lines = fs.readFileSync(path.join(dir, ".km", "gate-outcomes.ndjson"), "utf8").trim().split("\n")
+    expect(lines).toHaveLength(1) // only the original accept line
   })
 })

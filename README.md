@@ -24,7 +24,7 @@ Example:
 
 Keep the check cheap. It runs every time the agent tries to finish a turn in which it edited a file — not just once at the end of a session — so a slow check is paid repeatedly.
 
-`marker: true`'s hygiene notice is delivered by the Claude Code adapter's `Stop` hook: `additionalContext` under `hookSpecificOutput`, the same channel the reference implementation uses for its own hygiene marker, distinct from `systemMessage` (which only surfaces as a status line rather than feeding the model's context). The opencode adapter does not act on it yet — a clean accept there logs `decision.notice` if present but silently drops `decision.marker`, so turning `marker: true` on has no in-conversation effect under opencode until that wiring lands. It is still recorded on the sensor line either way.
+`marker: true`'s hygiene notice is delivered by both adapters, each over the channel it already uses for a block: Claude Code's `Stop` hook returns `additionalContext` under `hookSpecificOutput` — the same field the reference implementation uses for its own hygiene marker, distinct from `systemMessage` (which only surfaces as a status line rather than feeding the model's context). opencode has no such hook return value, so it continues the session with an injected `[kkamak-gate]`-prefixed message, same as a block. In both adapters `notice` and `marker` are separate channels: `notice` is diagnostic and only ever logged/surfaced as a status line, `marker` only ever reaches the model's own context. It is also always recorded on the sensor line, independent of delivery.
 
 ## Installing — Claude Code
 
