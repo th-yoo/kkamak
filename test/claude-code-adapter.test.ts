@@ -66,4 +66,41 @@ describe("planEmit", () => {
     const plan = planEmit({ kind: "block", evidence: "x", round: 1, roundsMax: 2 })
     expect(() => JSON.parse(JSON.stringify(plan.stdout))).not.toThrow()
   })
+
+  // Mirrors the reference implementation's own delivery for allow-with-marker
+  // (meta-harness cc-gate-plugin src/output.ts): hookSpecificOutput's
+  // additionalContext, a Stop-hook-specific field, not systemMessage —
+  // Claude Code feeds additionalContext into the model's own context rather
+  // than surfacing it as a status line the way systemMessage does.
+  test("an allow with a marker delivers it via hookSpecificOutput.additionalContext", () => {
+    const plan = planEmit({ kind: "allow", marker: "gate closed; do not reuse this evidence" })
+    expect(plan.exitCode).toBe(0)
+    expect(plan.stdout).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "Stop",
+        additionalContext: "gate closed; do not reuse this evidence",
+      },
+    })
+  })
+
+  test("a marker never rides systemMessage", () => {
+    const plan = planEmit({ kind: "allow", marker: "gate closed" })
+    expect(plan.stdout).not.toHaveProperty("systemMessage")
+  })
+
+  // Not reachable through gate.ts today (notice and marker are mutually
+  // exclusive there), but planEmit's own contract should not silently drop
+  // one if a future decision ever carries both.
+  test("a notice and a marker on the same decision both deliver", () => {
+    const plan = planEmit({ kind: "allow", notice: "gate exhausted", marker: "gate closed" })
+    expect(plan.stdout).toEqual({
+      systemMessage: "gate exhausted",
+      hookSpecificOutput: { hookEventName: "Stop", additionalContext: "gate closed" },
+    })
+  })
+
+  test("emits marker JSON that survives a round trip", () => {
+    const plan = planEmit({ kind: "allow", marker: "x" })
+    expect(() => JSON.parse(JSON.stringify(plan.stdout))).not.toThrow()
+  })
 })

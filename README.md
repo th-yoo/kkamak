@@ -24,7 +24,7 @@ Example:
 
 Keep the check cheap. It runs every time the agent tries to finish a turn in which it edited a file — not just once at the end of a session — so a slow check is paid repeatedly.
 
-`marker: true`'s hygiene notice is a kernel-level decision field (`GateDecision.marker`) today; neither harness adapter injects it into the conversation yet, so turning it on has no visible effect until that wiring lands. It is still recorded on the sensor line.
+`marker: true`'s hygiene notice is delivered by the Claude Code adapter's `Stop` hook: `additionalContext` under `hookSpecificOutput`, the same channel the reference implementation uses for its own hygiene marker, distinct from `systemMessage` (which only surfaces as a status line rather than feeding the model's context). The opencode adapter does not act on it yet — a clean accept there logs `decision.notice` if present but silently drops `decision.marker`, so turning `marker: true` on has no in-conversation effect under opencode until that wiring lands. It is still recorded on the sensor line either way.
 
 ## Installing — Claude Code
 

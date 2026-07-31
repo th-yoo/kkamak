@@ -32,6 +32,41 @@ the day's sensor numbers, and mechanism observations the sensor stream
 cannot see (behavioral shifts, qualitative saves, instrument anomalies).
 This file is proposer evidence — keep entries factual and dated.
 
+## 2026-07-31 — CC adapter wired to deliver the hygiene marker (yoo-dev)
+
+Follow-on to the `marker` milestone below: that commit (`65c9546`) left
+`GateDecision.marker` kernel-complete but undelivered — README flagged
+neither adapter injected it into the conversation yet.
+
+- **Claude Code — wired.** `src/adapters/claude-code/emit.ts`'s
+  `planEmit` now emits `hookSpecificOutput: { hookEventName: "Stop",
+  additionalContext: decision.marker }` on an allow decision carrying
+  `marker` — the same delivery channel the reference implementation uses
+  for its own `allow-with-marker` (meta-harness cc-gate-plugin
+  `src/output.ts`), and deliberately distinct from `systemMessage` (which
+  `notice` already used): `additionalContext` feeds the model's own
+  context, `systemMessage` only surfaces as a status line. `notice` and
+  `marker` deliver independently, so a future decision carrying both
+  would not silently drop one, though gate.ts never produces that
+  combination today.
+- **Which adapter events can ever carry it:** only `Stop` — `gate.ts`
+  only ever sets `GateDecision.marker` from `onStopRequested`'s accepted
+  branch. `PostToolUse` (file-edited) and `UserPromptSubmit`
+  (new-user-prompt) always resolve through `onFileEdited`/
+  `onNewUserPrompt`, which never return it, so those two hook events have
+  nothing to deliver regardless of adapter wiring.
+- **opencode — still not wired**, unchanged this milestone and noted in
+  README: `plugin.ts`'s `session.idle` handler logs `decision.notice`
+  when present but never reads `decision.marker`, so a clean accept with
+  `marker: true` silently drops the notice under opencode today. Same
+  event-scope rule applies there too (only the `session.idle` → stop path
+  could ever carry it).
+- Suite: 283 → 287 (4 new: `hookSpecificOutput.additionalContext`
+  delivery, marker never on `systemMessage`, notice+marker both deliver,
+  JSON round-trip). `bunx tsc --noEmit` clean. Golden fixture
+  (`test/fixtures/sensor-contract.ndjson`) untouched — this change never
+  touches sensor-line shape, only decision delivery.
+
 ## 2026-07-31 — real `marker` mechanism implemented, correcting an earlier misreading (yoo-dev)
 
 Next milestone after D1: implement the `marker` mechanism this kernel had

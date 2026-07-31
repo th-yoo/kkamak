@@ -19,8 +19,17 @@ export function planEmit(decision: GateDecision): EmitPlan {
       exitCode: 0,
     }
   }
-  if (decision.notice) {
-    return { stdout: { systemMessage: decision.notice }, exitCode: 0 }
+
+  const stdout: Record<string, unknown> = {}
+  if (decision.notice) stdout.systemMessage = decision.notice
+  // Same delivery channel the reference implementation uses for its
+  // allow-with-marker decision (meta-harness cc-gate-plugin src/output.ts):
+  // hookSpecificOutput.additionalContext, a Stop-hook-specific field that
+  // feeds text into the model's own context — distinct from systemMessage,
+  // which only surfaces as a status line.
+  if (decision.marker) {
+    stdout.hookSpecificOutput = { hookEventName: "Stop", additionalContext: decision.marker }
   }
-  return { exitCode: 0 }
+  if (Object.keys(stdout).length === 0) return { exitCode: 0 }
+  return { stdout, exitCode: 0 }
 }
