@@ -13,6 +13,7 @@ const base = {
   interrupted: false,
   rounds: ["accepted"] as const,
   durationMs: 4200,
+  marker: false,
 }
 
 describe("buildSensorLine", () => {
@@ -46,12 +47,15 @@ describe("buildSensorLine", () => {
     expect(line.pluginVersion).toBe(KERNEL_VERSION)
   })
 
-  // The consumer's frozen contract requires `marker` on every line. This
-  // kernel has no marker mechanism (no session-carryover concept) — see
-  // sensor.ts's doc comment on the field for the deferral this stands in for.
-  test("stamps marker false, since this kernel has no marker mechanism yet", () => {
-    const line = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds] })
-    expect(line.marker).toBe(false)
+  // The consumer's frozen contract requires `marker` on every line — the
+  // hygiene-marker mechanism this reflects (config.marker, gate.ts). This is
+  // a caller-supplied value, not a kernel default: see gate.ts for the rule
+  // (fires only on a clean accept with the config toggle on).
+  test("threads marker through", () => {
+    const on = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds], marker: true })
+    expect(on.marker).toBe(true)
+    const off = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds], marker: false })
+    expect(off.marker).toBe(false)
   })
 
   test("stamps ts from the clock", () => {
@@ -86,6 +90,7 @@ describe("buildSensorLine", () => {
       interrupted: true,
       rounds: ["verify-failed", "verify-failed"] as const,
       durationMs: 90_000,
+      marker: false,
     }
     const line = buildSensorLine(info, clock, { ...args, rounds: [...args.rounds] })
     expect(line.sessionID).toBe(args.sessionID)

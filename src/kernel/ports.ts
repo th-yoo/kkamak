@@ -42,6 +42,18 @@ export interface GateConfig {
   sensor: string
   /** Hard cap on a single check run. */
   checkTimeoutMs: number
+  /**
+   * Off by default. When on, a clean accept both stamps `SensorLine.marker`
+   * and returns a hygiene countermand (`GateDecision.marker`) for the
+   * agent's own context — advisory: it counters residue of the just-closed
+   * cycle's check evidence without being an instruction for whatever comes
+   * next. Never fires on exhaustion or on an interrupted/skipped line, even
+   * with this on. Matches the frozen contract's own config field and
+   * semantics (meta-harness cc-gate-plugin `GateConfig.marker` /
+   * `src/core/stop.ts` / README) — a same-cycle accept-time injection, NOT
+   * cross-session persistence.
+   */
+  marker: boolean
 }
 
 /** One append-only sensor line, written once per completed gate cycle. */
@@ -78,14 +90,19 @@ export interface SensorLine {
    */
   skippedStop?: boolean
   /**
-   * Session-carryover marker flag, required by the frozen consumer contract
-   * (km-crank's SensorLine). The installed plugin's semantics: a marker
-   * records whether this cycle carried over a marker from a prior session,
-   * default OFF. This kernel has no marker/session-carryover mechanism at
-   * all yet, so `buildSensorLine` always stamps `false` here — see its doc
-   * comment. DEFERRED to a later milestone: implementing real marker
-   * tracking (unrelated to the D1 packaging deferral below, which is
-   * closed).
+   * True iff this cycle injected a hygiene marker: `GateConfig.marker` was
+   * on and the round was a clean accept. Always false on exhaustion or an
+   * interrupted/skipped line, even with the config toggle on — see
+   * `GateConfig.marker`'s doc comment for the full rule and `gate.ts` for
+   * where each caller sets this.
+   *
+   * CORRECTION (this kernel's own prior doc comment here, and once a task
+   * prompt reflecting it, both described this as a "session-carryover"
+   * flag persisted across process boundaries — checked directly against
+   * the frozen contract's source, meta-harness `cc-gate-plugin/src/
+   * core/stop.ts` and README, and that mechanism does not exist there.
+   * `marker` is a same-cycle, same-session accept-time toggle; nothing
+   * about it is ever written to or read from disk across sessions.
    */
   marker: boolean
   /**
@@ -126,10 +143,13 @@ export type GateEvent =
  * `evidence` is the check's raw output and nothing else — framing prose is the
  * adapter's job, since each harness delivers a block differently. `notice`
  * carries allow-path messages that still need to reach the user (exhausted,
- * disarmed).
+ * disarmed). `marker` carries a hygiene countermand for the agent's own
+ * context — present only when `GateConfig.marker` is on and this cycle just
+ * cleanly accepted (see `GateConfig.marker`'s doc comment); never set
+ * alongside `notice`, and never on exhaustion.
  */
 export type GateDecision =
-  | { kind: "allow"; notice?: string }
+  | { kind: "allow"; notice?: string; marker?: string }
   | { kind: "block"; evidence: string; round: number; roundsMax: number }
 
 // ── Ports the host supplies ─────────────────────────────────────────────────

@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { DEFAULT_CHECK_TIMEOUT_MS, DEFAULT_ROUNDS, DEFAULT_SENSOR_PATH, parseGateConfig } from "../src/kernel/config.ts"
+import {
+  DEFAULT_CHECK_TIMEOUT_MS,
+  DEFAULT_MARKER,
+  DEFAULT_ROUNDS,
+  DEFAULT_SENSOR_PATH,
+  parseGateConfig,
+} from "../src/kernel/config.ts"
 
 describe("parseGateConfig", () => {
   test("parses a minimal config and fills defaults", () => {
@@ -9,25 +15,40 @@ describe("parseGateConfig", () => {
       rounds: DEFAULT_ROUNDS,
       sensor: DEFAULT_SENSOR_PATH,
       checkTimeoutMs: DEFAULT_CHECK_TIMEOUT_MS,
+      marker: DEFAULT_MARKER,
     })
   })
 
-  test("defaults are rounds 2, .km/gate-outcomes.ndjson, 300s", () => {
+  test("defaults are rounds 2, .km/gate-outcomes.ndjson, 300s, marker off", () => {
     expect(DEFAULT_ROUNDS).toBe(2)
     expect(DEFAULT_SENSOR_PATH).toBe(".km/gate-outcomes.ndjson")
     expect(DEFAULT_CHECK_TIMEOUT_MS).toBe(300_000)
+    expect(DEFAULT_MARKER).toBe(false)
   })
 
   test("honours every explicit field", () => {
     const cfg = parseGateConfig(
-      '{"check":"npm test","rounds":5,"sensor":"logs/x.ndjson","checkTimeoutMs":1000}',
+      '{"check":"npm test","rounds":5,"sensor":"logs/x.ndjson","checkTimeoutMs":1000,"marker":true}',
     )
     expect(cfg).toEqual({
       check: "npm test",
       rounds: 5,
       sensor: "logs/x.ndjson",
       checkTimeoutMs: 1000,
+      marker: true,
     })
+  })
+
+  // Matches the frozen contract's own coercion (cc-gate-plugin config.ts:
+  // `marker: j.marker === true`) — only the JSON literal `true` turns it on,
+  // never a truthy-but-not-boolean value.
+  test.each([
+    ["missing", '{"check":"x"}'],
+    ["the string \"true\"", '{"check":"x","marker":"true"}'],
+    ["the number 1", '{"check":"x","marker":1}'],
+    ["null", '{"check":"x","marker":null}'],
+  ])("marker is false for %s", (_label, raw) => {
+    expect(parseGateConfig(raw)?.marker).toBe(false)
   })
 
   test("rounds 0 is legal — observe-only mode", () => {

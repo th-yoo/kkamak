@@ -124,6 +124,29 @@ describe("sensor contract: driven-kernel emission conforms to the frozen SensorL
     expect(line.rounds).toEqual(["accepted"])
     expect(line.accepted).toBe(true)
     expect(line.gateExhausted).toBe(false)
+    expect(line.marker).toBe(false)
+  })
+
+  // 1b. Same shape, gate.json's hygiene-marker toggle on: real semantics
+  // (meta-harness cc-gate-plugin src/core/stop.ts, README — a same-cycle
+  // accept-time context injection, NOT session-carryover) fire it only on a
+  // clean accept.
+  test("clean accept with the hygiene marker enabled", async () => {
+    const h = makeHarness({
+      raw: '{"check":"bun test","marker":true}',
+      script: [PASS],
+      clock: new FakeClock(1_000, 500),
+    })
+    const gate = createGate(h.host)
+    await gate.handle({ kind: "file-edited", sessionID: "sess-clean-marker" })
+    const decision = await gate.handle({ kind: "stop-requested", sessionID: "sess-clean-marker" })
+
+    expect(decision.kind).toBe("allow")
+    expect((decision as { marker?: string }).marker).toBeString()
+    expect(h.sensor.lines).toHaveLength(1)
+    const line = h.sensor.lines[0]! as unknown as Record<string, unknown>
+    assertConformsToSensorContract(line)
+    expect(line.marker).toBe(true)
   })
 
   // 2. Catch: a block round then a fix — mirrors CATCH_BLOCK_THEN_FIX.
@@ -143,7 +166,13 @@ describe("sensor contract: driven-kernel emission conforms to the frozen SensorL
 
   // 3. Exhausted: rounds budget spent — mirrors EXHAUSTED.
   test("exhausted", async () => {
-    const h = makeHarness({ fallback: FAIL, clock: new FakeClock(1_000, 500) })
+    // marker:true on purpose — proves the exhaustion override actually
+    // fires, not just that the default happens to be false.
+    const h = makeHarness({
+      raw: '{"check":"bun test","marker":true}',
+      fallback: FAIL,
+      clock: new FakeClock(1_000, 500),
+    })
     const gate = createGate(h.host)
     await gate.handle({ kind: "file-edited", sessionID: "sess-exhausted" })
     await gate.handle({ kind: "stop-requested", sessionID: "sess-exhausted" }) // block 1
@@ -151,14 +180,14 @@ describe("sensor contract: driven-kernel emission conforms to the frozen SensorL
     const decision = await gate.handle({ kind: "stop-requested", sessionID: "sess-exhausted" }) // exhausted
 
     expect(decision.kind).toBe("allow")
+    expect((decision as { marker?: string }).marker).toBeUndefined()
     expect(h.sensor.lines).toHaveLength(1)
     const line = h.sensor.lines[0]! as unknown as Record<string, unknown>
     assertConformsToSensorContract(line)
     expect(line.gateExhausted).toBe(true)
     expect(line.rounds).toEqual(["verify-failed", "verify-failed", "verify-failed"])
     // stop.ts's rule on the frozen contract's side: marker must never fire on
-    // exhaustion. This kernel always stamps marker:false (no mechanism yet),
-    // so it already satisfies that rule trivially.
+    // exhaustion, even with the config toggle on (proven above, not assumed).
     expect(line.marker).toBe(false)
   })
 

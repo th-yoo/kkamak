@@ -32,6 +32,62 @@ the day's sensor numbers, and mechanism observations the sensor stream
 cannot see (behavioral shifts, qualitative saves, instrument anomalies).
 This file is proposer evidence — keep entries factual and dated.
 
+## 2026-07-31 — real `marker` mechanism implemented, correcting an earlier misreading (yoo-dev)
+
+Next milestone after D1: implement the `marker` mechanism this kernel had
+stamped `false` on every line. The task's initial framing (and this
+repo's own prior `SensorLine.marker` doc comment, written before this
+session) described it as a "session-carryover" flag — persisted state
+that follows a session across process restarts so a downstream consumer
+could join interrupted work across session boundaries.
+
+**That description is wrong.** Read directly against the frozen contract's
+source before implementing anything (meta-harness `cc-gate-plugin/src/
+core/stop.ts`, `src/config.ts`, `vendor/session2.ts`, and its own
+README), not against this repo's prior comments:
+- `GateConfig.marker` is a static config toggle, default `false`. README:
+  "If true, successful runs inject a hygiene marker into Claude's
+  context."
+- The marker text (`HYGIENE_MARKER`) is a same-session countermand
+  injected at accept time for a bench mode that chains two different
+  tasks into one session (`run.ts --then --marker`) — never written to
+  disk, never read back by a later process.
+- `SensorLine.marker` just records whether that injection fired *this
+  cycle*: true only when `cfg.marker` is on and the round cleanly
+  accepted. `stop.ts` explicitly forces it `false` on exhaustion —
+  "Marker must NOT fire on exhaustion even with cfg.marker true."
+
+There is no cross-session persistence anywhere in the reference. Flagged
+this to the operator mid-task rather than building the described (but
+nonexistent) feature; confirmed direction: port the actual semantics and
+correct the wrong wording everywhere it appeared.
+
+**Implemented (kernel-side only):**
+- `GateConfig.marker: boolean` (default `false`, `config.ts`) — same
+  coercion as upstream (`j.marker === true`, so only the JSON literal
+  `true` turns it on).
+- `GateDecision`'s `allow` variant gains `marker?: string` — a hygiene
+  notice (kkamak's own wording, not copied from `HYGIENE_MARKER`),
+  returned only on a clean accept with the config on. Never set alongside
+  exhaustion, a block, or an interrupted/skipped line, even with the
+  config on.
+- `SensorLine.marker` / `SensorArgs.marker` — now a caller-threaded
+  required field (`gate.ts` sets it explicitly at all four `record()`
+  call sites) instead of a hardcoded `false`.
+- Corrected the "session-carryover" wording in `ports.ts`'s
+  `SensorLine.marker` doc comment and in README's sensor-field docs.
+- Not done this milestone: neither harness adapter (Claude Code, opencode)
+  reads `GateDecision.marker` yet, so turning the config on has no visible
+  in-conversation effect today — only the sensor line and the kernel-level
+  decision field. Noted in README. Matches this repo's established
+  pattern of landing a kernel milestone before its adapter wiring (see the
+  D1 entry below, and the original harness-adapters entry further down).
+- Suite: 272 → 283 (11 new: config coercion tests, sensor threading tests,
+  6 gate-level hygiene-marker behavior tests, 2 contract-conformance
+  tests). `bunx tsc --noEmit` clean. Golden fixture
+  (`test/fixtures/sensor-contract.ndjson`) untouched — byte-shared with
+  meta-harness km-crank, and this change never required touching it.
+
 ## 2026-07-31 — D1 closure: pluginVersion/forced adopted (yoo-dev)
 
 Closes the D1 deferral recorded below (packaging milestone, ahead of

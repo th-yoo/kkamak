@@ -3,6 +3,7 @@ import type { GateConfig } from "./ports.ts"
 export const DEFAULT_ROUNDS = 2
 export const DEFAULT_SENSOR_PATH = ".km/gate-outcomes.ndjson"
 export const DEFAULT_CHECK_TIMEOUT_MS = 300_000
+export const DEFAULT_MARKER = false
 
 /** A non-negative integer, and not Infinity/NaN. */
 function isCount(x: unknown): x is number {
@@ -41,5 +42,8 @@ export function parseGateConfig(raw: string | undefined): GateConfig | undefined
     checkTimeoutMs: isCount(j.checkTimeoutMs) && j.checkTimeoutMs > 0
       ? j.checkTimeoutMs
       : DEFAULT_CHECK_TIMEOUT_MS,
+    // Matches the frozen contract's own coercion (cc-gate-plugin config.ts):
+    // only the JSON literal `true` turns it on, any other value is off.
+    marker: j.marker === true,
   }
 }

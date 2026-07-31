@@ -12,6 +12,7 @@ Drop a `gate.json` in the repo root. Every field but `check` is optional:
 | `rounds`         | no       | `2`                          | How many failing checks the gate will block on before giving up. `rounds: 2` means: the first and second failing checks each produce a block, and the third failing check is allowed through. `rounds: 0` is observe-only — the check still runs and is recorded, but the very first failure is let through unblocked. |
 | `sensor`         | no       | `.km/gate-outcomes.ndjson`   | Where outcome lines are appended, relative to the repo root. |
 | `checkTimeoutMs` | no       | `300000` (5 minutes)         | Hard cap on one check run; a check that runs past this is killed and counted as a failed round. |
+| `marker`         | no       | `false`                      | If `true`, a clean accept (not a block, not an exhausted give-up) also returns a hygiene notice — advisory text saying this cycle's check evidence is closed and should not be carried into unrelated work. Same-cycle only; nothing is persisted across sessions. |
 
 Under Claude Code, keep `checkTimeoutMs` under 600000 (600s): the `Stop` hook in `hooks/hooks.json` has its own 600s timeout, and if that fires first, Claude Code kills the hook process before the gate ever gets to record a decision — fail-open still holds (no state written, no round consumed), but the check silently never gets its full configured time.
 
@@ -22,6 +23,8 @@ Example:
 ```
 
 Keep the check cheap. It runs every time the agent tries to finish a turn in which it edited a file — not just once at the end of a session — so a slow check is paid repeatedly.
+
+`marker: true`'s hygiene notice is a kernel-level decision field (`GateDecision.marker`) today; neither harness adapter injects it into the conversation yet, so turning it on has no visible effect until that wiring lands. It is still recorded on the sensor line.
 
 ## Installing — Claude Code
 
@@ -62,7 +65,7 @@ Fields:
 - `interrupted` — true whenever a new user prompt cut measurement short: preempting an open cycle, or (see `skippedStop`) arriving before one ever reached a stop.
 - `rounds` — `"accepted"`/`"verify-failed"` per check attempt in the cycle.
 - `durationMs` — whole-cycle wall time, including agent think time, subagent runs and human wait.
-- `marker` — session-carryover marker flag required by the downstream consumer's frozen contract. This kernel has no marker/session-carryover mechanism yet, so every line stamps `false`; real marker tracking is a later milestone.
+- `marker` — true iff this cycle injected the hygiene notice described in the `gate.json` table above: the `marker` config was on and the round was a clean accept. Always `false` on a block, an exhausted give-up, or an interrupted/skipped line, even with the config on. Same-cycle, same-session only — despite this field's name, nothing here is ever persisted or read back across sessions.
 - `pluginVersion` — this kernel's own version (`package.json`'s `version`), stamped on every line. Optional on the downstream consumer's frozen contract, since a producer may be unable to determine its own version; this kernel always can, so it is never absent here.
 - `checkMs` *(optional)* — per-round check execution time only, parallel to `rounds`. `durationMs` alone can't tell you what the check itself costs: an observed 420-second cycle contained a ~1-second check.
 - `skippedStop` *(optional)* — present and `true` only on a diagnostic line: a queued user message consumed a turn boundary before a stop was ever delivered, so no check ran and `rounds` is empty. The session stays armed, so the next real stop still measures the accumulated edits. Without this field, that session would look identical to one with no edits at all.

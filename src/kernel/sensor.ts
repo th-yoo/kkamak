@@ -48,6 +48,8 @@ export interface SensorArgs {
   interrupted: boolean
   rounds: RoundOutcome[]
   durationMs: number
+  /** See `SensorLine.marker`'s doc comment: the caller (gate.ts) computes this. */
+  marker: boolean
   checkMs?: number[]
   skippedStop?: boolean
   /** See `SensorLine.forced`'s doc comment: no current caller sets this. */
@@ -72,11 +74,7 @@ export function buildSensorLine(info: HostInfo, clock: Clock, args: SensorArgs):
     durationMs: args.durationMs,
     host: info.host,
     app: info.app,
-    // Required by the frozen consumer contract, but this kernel has no
-    // marker/session-carryover mechanism at all (no SensorArgs field feeds
-    // it) — always stamp the documented default-OFF value. DEFERRED: real
-    // marker tracking. See SensorLine.marker's doc comment.
-    marker: false,
+    marker: args.marker,
     // This kernel always knows its own version, unlike the frozen contract's
     // general "producer may not know" case — so unlike checkMs/skippedStop/
     // forced below, this is never conditional. See SensorLine.pluginVersion.

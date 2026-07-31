@@ -23,6 +23,16 @@ import type {
 /** Consecutive internal errors after which the gate gives up on the session. */
 export const ERROR_STREAK_LIMIT = 3
 
+/**
+ * Advisory hygiene countermand, returned on `GateDecision.marker` when
+ * `GateConfig.marker` is on and a cycle just cleanly accepted. Mirrors the
+ * intent of the frozen contract's own hygiene marker (meta-harness
+ * cc-gate-plugin `vendor/session2.ts`'s `HYGIENE_MARKER`) without copying
+ * its wording — kkamak-style, not a port.
+ */
+export const HYGIENE_MARKER =
+  "kkamak: the gate for this task is closed — its check output and verification transcripts are obsolete; do not carry them into unrelated work."
+
 const ALLOW: GateDecision = { kind: "allow" }
 
 export function createGate(host: GateHost): Gate {
@@ -99,6 +109,7 @@ function onNewUserPrompt(
         rounds: [],
         checkMs: [],
         durationMs: 0,
+        marker: false,
       })
     }
     return ALLOW
@@ -114,6 +125,7 @@ function onNewUserPrompt(
       rounds: state.outcomes,
       checkMs: state.checkMs,
       durationMs: elapsed(host, state.cycleStartedAt),
+      marker: false,
     })
   }
 
@@ -169,9 +181,10 @@ async function onStopRequested(
       rounds: outcomes,
       checkMs,
       durationMs: elapsed(host, startedAt),
+      marker: config.marker,
     })
     persist(host, sessionID, { ...INITIAL_STATE })
-    return ALLOW
+    return config.marker ? { kind: "allow", marker: HYGIENE_MARKER } : ALLOW
   }
 
   // rounds is a budget of blocks: `rounds + 1` failing checks ends the cycle.
@@ -213,6 +226,9 @@ async function onStopRequested(
     rounds: outcomes,
     checkMs,
     durationMs: elapsed(host, startedAt),
+    // Marker must never fire on exhaustion, even with config.marker on —
+    // see GateConfig.marker's doc comment.
+    marker: false,
   })
   persist(host, sessionID, { ...INITIAL_STATE })
   return {

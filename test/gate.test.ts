@@ -187,6 +187,73 @@ describe("failing check", () => {
   })
 })
 
+// gate.json's `marker` toggle: real reference semantics (meta-harness
+// cc-gate-plugin src/core/stop.ts, README), NOT the "session-carryover"
+// this repo's own docs previously (incorrectly) described. Off by default;
+// when on, a clean accept both stamps the sensor line and returns a
+// hygiene countermand for the agent's own context — but exhaustion and
+// interrupted/skipped lines must never carry it, even with the toggle on.
+describe("hygiene marker", () => {
+  test("off by default: a clean accept carries no marker", async () => {
+    const h = makeHarness({ script: [PASS] })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    expect(await gate.handle(stop)).toEqual({ kind: "allow" })
+    expect(h.sensor.lines[0]?.marker).toBe(false)
+  })
+
+  test("on: a clean accept returns a marker and stamps the sensor line", async () => {
+    const h = makeHarness({ raw: '{"check":"x","marker":true}', script: [PASS] })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    const decision = await gate.handle(stop)
+    expect(decision.kind).toBe("allow")
+    expect((decision as { marker?: string }).marker).toBeString()
+    expect((decision as { marker?: string }).marker!.length).toBeGreaterThan(0)
+    expect(h.sensor.lines[0]?.marker).toBe(true)
+  })
+
+  test("never fires on exhaustion, even with the toggle on", async () => {
+    const h = makeHarness({ raw: '{"check":"x","marker":true}', fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    await gate.handle(stop)
+    const third = await gate.handle(stop)
+    expect(third.kind).toBe("allow")
+    expect((third as { marker?: string }).marker).toBeUndefined()
+    expect(h.sensor.lines[0]?.marker).toBe(false)
+  })
+
+  test("never fires on an interrupted cycle, even with the toggle on", async () => {
+    const h = makeHarness({ raw: '{"check":"x","marker":true}', fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop) // opens a cycle
+    const decision = await gate.handle(prompt) // preempts it
+    expect(decision).toEqual({ kind: "allow" })
+    expect(h.sensor.lines[0]?.marker).toBe(false)
+  })
+
+  test("never fires on a skipped-stop diagnostic line, even with the toggle on", async () => {
+    const h = makeHarness({ raw: '{"check":"x","marker":true}', fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    const decision = await gate.handle(prompt) // never reached a stop
+    expect(decision).toEqual({ kind: "allow" })
+    expect(h.sensor.lines[0]?.marker).toBe(false)
+  })
+
+  test("a block decision never carries a marker", async () => {
+    const h = makeHarness({ raw: '{"check":"x","marker":true}', script: [FAIL] })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    const decision = await gate.handle(stop)
+    expect(decision.kind).toBe("block")
+    expect(decision).not.toHaveProperty("marker")
+  })
+})
+
 describe("config is the escape hatch", () => {
   test("is re-read on every event, never cached", async () => {
     const h = makeHarness({ fallback: PASS })

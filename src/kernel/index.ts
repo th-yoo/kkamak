@@ -18,9 +18,10 @@ export type {
   StateStore,
 } from "./ports.ts"
 
-export { createGate, ERROR_STREAK_LIMIT } from "./gate.ts"
+export { createGate, ERROR_STREAK_LIMIT, HYGIENE_MARKER } from "./gate.ts"
 export {
   DEFAULT_CHECK_TIMEOUT_MS,
+  DEFAULT_MARKER,
   DEFAULT_ROUNDS,
   DEFAULT_SENSOR_PATH,
   parseGateConfig,
