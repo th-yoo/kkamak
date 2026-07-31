@@ -32,6 +32,16 @@ the day's sensor numbers, and mechanism observations the sensor stream
 cannot see (behavioral shifts, qualitative saves, instrument anomalies).
 This file is proposer evidence — keep entries factual and dated.
 
+## 2026-07-31 — CHANGELOG.md added (yoo-dev)
+
+`CHANGELOG.md` now exists at the repo root, keep-a-changelog format, one
+`[Unreleased] - 2026-07-31` section grouped Added/Fixed, summarizing
+today's five commits (`ead09d5`, `ad63d3b`, `65c9546`, `8e23103`,
+`9d2f6f6`) — one line each, linking to this file's matching entry rather
+than restating detail. Precursor to the packaging milestone this repo has
+been tracking toward since D1 (`docs/dogfood-log.md`'s own D1 entries) —
+a real release needs a changelog before it needs a version bump.
+
 ## 2026-07-31 — opencode adapter wired to deliver the hygiene marker (yoo-dev)
 
 Closes the opencode gap the CC-adapter entry below left open: both

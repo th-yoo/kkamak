@@ -72,3 +72,7 @@ Fields:
 - `forced` *(optional)* — true iff an env override forced this session's reinject arm. The downstream consumer's frozen contract scopes this to `KKAMAK_REINJECT`; this kernel has no reinject-arm mechanism at all, so it never sets this field today.
 
 All optional fields may be absent from any given line; a consumer must tolerate that.
+
+## Docs
+
+Notable changes are tracked in [`CHANGELOG.md`](CHANGELOG.md).
