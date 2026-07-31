@@ -43,6 +43,15 @@ ln -s /path/to/kkamak/src/adapters/opencode/plugin.ts .opencode/plugin/kkamak.ts
 
 Confirmed by reading further into the loader: it imports whatever path the directory scan found exactly as given, without first resolving a symlink to its real path. Confirmed with a local Bun reproduction of that same mechanism: a module loaded that way still resolves its own relative imports against its real target directory, not the symlink's — so this checkout's internal imports keep working through the symlink. Not confirmed live: that opencode still expects this repo's exact plugin shape end to end. opencode has no blocking stop hook, so a block is delivered by continuing the session: the adapter injects a user message prefixed `[kkamak-gate]` carrying the check's output, rather than refusing the stop. Check this yourself on first use — edit a file and let opencode go idle; silence means the plugin never loaded, which looks exactly like a passing check since kkamak fails open.
 
+## Delivery channels
+
+`marker` and `notice` (see the `gate.json` table above and `GateDecision`'s doc comment) always deliver over separate, adapter-specific channels — never merged into one:
+
+| adapter     | marker channel                                                    | notice channel |
+|-------------|---------------------------------------------------------------------|-----------------|
+| Claude Code | `hookSpecificOutput.additionalContext` on the `Stop` hook's response | `systemMessage` |
+| opencode    | injected continuation prompt (`[kkamak-gate]`-prefixed, same mechanism a block uses) | logged only (stderr), never injected |
+
 ## Turning it off
 
 The gate re-reads `gate.json` on every event and holds nothing in memory. Edit or delete it and the change applies on the very next turn — no restart, no reinstall.
