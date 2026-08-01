@@ -1,0 +1,13 @@
+{
+  "name": "kkamak",
+  "owner": {
+    "name": "th-yoo"
+  },
+  "plugins": [
+    {
+      "name": "kkamak",
+      "source": "./",
+      "description": "kkamak completion gate — Claude Code cannot say done until your check passes"
+    }
+  ]
+}
