@@ -70,3 +70,27 @@ stderr rather than being captured — so every `bun test` run, including CI,
 prints a bare `hello` line above the pass/fail summary. Judged minor because
 it's purely cosmetic: the line carries no information and doesn't affect the
 test's pass/fail result.
+
+## Regression: `gate.json`'s `gauge` field was wrongly removed, then restored
+
+This repo's own tracked `gate.json` carries `"gauge": true`. The public
+kernel's `parseGateConfig` (`src/kernel/config.ts`) ignores unknown fields
+entirely, so in a plain kkamak install `gauge` does nothing — which made it
+look, correctly for any other install, like dead config. A later review
+finding removed it from this file on exactly that basis.
+
+But on the maintainer's own machine this repo's `gate.json` is also read by
+an installed research build, `cc-gate-plugin` (a separate, private plugin
+layered on top of kkamak for dogfooding measurement), whose
+`src/config.ts:18` reads `gauge: j.gauge === true` and whose
+`src/gauge/spawn.ts:36` returns early — arming no measurement — unless that
+field is `true`. Removing the field from this repo's `gate.json` silently
+disabled that instrument's corpus collection here; every gate cycle between
+the removal and its discovery recorded no gauge data, and that gap is not
+recoverable after the fact.
+
+**Do not remove `gauge` from this repo's `gate.json` again** on the grounds
+that the public kernel doesn't read it. It is intentionally present for a
+consumer outside this repo's own kernel. If the public-facing sample gate.json
+shown in README.md or elsewhere needs to omit it for clarity, that's a
+different file than this repo's own root `gate.json` — don't conflate the two.
