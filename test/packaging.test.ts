@@ -102,9 +102,19 @@ describe("installation shape", () => {
       ".claude-plugin/marketplace.json",
       "hooks/hooks.json",
       "package.json",
+      "commands/init.md",
     ]) {
       expect(fs.existsSync(path.join(ROOT, rel))).toBe(true)
     }
+  })
+
+  // The command points users at the token-free CLI by path. Nothing imports
+  // either file, so a rename would leave the instruction quietly wrong.
+  test("the init command points at a CLI that exists", () => {
+    const command = fs.readFileSync(path.join(ROOT, "commands/init.md"), "utf8")
+    const match = /(src\/cli\/[\w./-]+\.ts)/.exec(command)
+    expect(match).not.toBeNull()
+    expect(fs.existsSync(path.join(ROOT, match![1]!))).toBe(true)
   })
 
   const ENTRYPOINTS = ["src/adapters/claude-code/hook-cli.ts", "src/adapters/opencode/plugin.ts"]
