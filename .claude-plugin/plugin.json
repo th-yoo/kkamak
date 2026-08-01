@@ -1,5 +1,12 @@
 {
   "name": "kkamak",
-  "version": "0.3.0",
-  "description": "kkamak completion gate — Claude Code cannot say done until your check passes"
+  "version": "0.4.0",
+  "description": "kkamak completion gate — Claude Code cannot say done until your check passes",
+  "author": {
+    "name": "th-yoo"
+  },
+  "license": "MIT",
+  "repository": "https://github.com/th-yoo/kkamak",
+  "homepage": "https://github.com/th-yoo/kkamak",
+  "keywords": ["completion-gate", "hooks", "stop-hook", "verification", "tests"]
 }

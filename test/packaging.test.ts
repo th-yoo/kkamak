@@ -35,6 +35,43 @@ describe("Claude Code plugin manifests", () => {
     expect(read("package.json").version).toBe(KERNEL_VERSION)
   })
 
+  // Without a marketplace manifest `claude plugin install` has nothing to
+  // resolve — the checkout is loadable only via --plugin-dir. This repo is its
+  // own marketplace, so the manifest sits beside plugin.json.
+  test("marketplace.json declares a name and an owner", () => {
+    const marketplace = read(".claude-plugin/marketplace.json")
+    expect(marketplace.name).toBe("kkamak")
+    expect(String((marketplace.owner as Record<string, unknown>).name).length).toBeGreaterThan(0)
+  })
+
+  test("marketplace.json lists this plugin at the repo root", () => {
+    const marketplace = read(".claude-plugin/marketplace.json") as { plugins: Record<string, unknown>[] }
+    const entry = marketplace.plugins.find((p) => p.name === read(".claude-plugin/plugin.json").name)
+    expect(entry).toBeDefined()
+    // "./" is the repo root: the marketplace and the plugin it serves are the
+    // same checkout, so a source pointing anywhere else cannot resolve.
+    expect(entry!.source).toBe("./")
+  })
+
+  // The README's sensor sample is a real line with a pluginVersion in it.
+  // Nothing else stops it from advertising a version this repo stopped
+  // shipping several releases ago.
+  test("the README's sensor sample carries the shipped version", () => {
+    const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8")
+    const versions = [...readme.matchAll(/"pluginVersion":"([^"]+)"/g)].map((m) => m[1])
+    expect(versions.length).toBeGreaterThan(0)
+    for (const version of versions) expect(version).toBe(String(read("package.json").version))
+  })
+
+  // Provenance a stranger installing from a marketplace has no other way to
+  // check: who publishes this, under what licence, from which repo.
+  test("plugin.json carries author, licence and repository", () => {
+    const plugin = read(".claude-plugin/plugin.json")
+    expect(String((plugin.author as Record<string, unknown>).name).length).toBeGreaterThan(0)
+    expect(plugin.license).toBe("MIT")
+    expect(String(plugin.repository)).toContain("github.com/th-yoo/kkamak")
+  })
+
   test("registers exactly the events the adapter handles", () => {
     const manifest = read("hooks/hooks.json") as { hooks: Record<string, unknown> }
     expect(Object.keys(manifest.hooks).sort()).toEqual([...HOOK_EVENTS].sort())
@@ -79,9 +116,24 @@ describe("installation shape", () => {
   // Nothing imports these, so the transitive-closure walk below can never
   // reach them — they need their own existence assertion.
   test("the manifests installation relies on are present", () => {
-    for (const rel of [".claude-plugin/plugin.json", "hooks/hooks.json", "package.json"]) {
+    for (const rel of [
+      ".claude-plugin/plugin.json",
+      ".claude-plugin/marketplace.json",
+      "hooks/hooks.json",
+      "package.json",
+      "commands/init.md",
+    ]) {
       expect(fs.existsSync(path.join(ROOT, rel))).toBe(true)
     }
+  })
+
+  // The command points users at the token-free CLI by path. Nothing imports
+  // either file, so a rename would leave the instruction quietly wrong.
+  test("the init command points at a CLI that exists", () => {
+    const command = fs.readFileSync(path.join(ROOT, "commands/init.md"), "utf8")
+    const match = /(src\/cli\/[\w./-]+\.ts)/.exec(command)
+    expect(match).not.toBeNull()
+    expect(fs.existsSync(path.join(ROOT, match![1]!))).toBe(true)
   })
 
   const ENTRYPOINTS = ["src/adapters/claude-code/hook-cli.ts", "src/adapters/opencode/plugin.ts"]

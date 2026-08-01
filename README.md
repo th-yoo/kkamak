@@ -1,10 +1,55 @@
 # kkamak
 
-kkamak is a completion gate: it stops a coding agent from claiming a turn is done until a check you configure — usually your test suite — actually passes. It works with Claude Code and opencode.
+kkamak is a completion gate for Claude Code: it stops the agent from claiming a turn is done until a check you configure — usually your test suite — actually passes.
 
-## Configuration: `gate.json`
+When Claude finishes a turn in which it edited files, the gate runs your check. If the check fails, Claude is blocked and handed the failure output, and it has to keep working. After a configured number of failed rounds the gate gives up and lets the turn through, so it can never trap a session.
 
-Drop a `gate.json` in the repo root. Every field but `check` is optional:
+```mermaid
+flowchart LR
+    E[Claude edits files] --> S[Claude tries to end the turn]
+    S --> C{your check passes?}
+    C -->|yes| A[turn ends]
+    C -->|no, rounds left| B[blocked, given the output] --> E
+    C -->|no, rounds spent| A
+```
+
+An opencode adapter also ships in this repo; it is experimental and documented separately in [`docs/opencode.md`](docs/opencode.md).
+
+## Install
+
+**Prerequisite:** `bun` must be on `PATH`. Hook processes inherit Claude Code's environment, which for a GUI-launched Claude may not be your terminal's — if `bun` is missing the hook cannot run and the gate fails open silently. Verify with `bun -v` from the same context you launch Claude in.
+
+```bash
+claude plugin marketplace add th-yoo/kkamak
+claude plugin install kkamak@kkamak
+```
+
+Installation is per-machine, not per-repo: it does not travel with a checkout, so run these once on each machine. The install is a copy, not a live reference — after pulling a new version, run `claude plugin marketplace update kkamak` and reinstall.
+
+For development against a checkout, skip the marketplace and load it directly: `claude --plugin-dir /path/to/kkamak` (one session only).
+
+**Confirm it loaded.** kkamak fails open by design — any internal error allows the turn through — so a gate that never loaded looks exactly like a check that always passes. On first use, point `check` at something that fails, edit a file, and end your turn. You should be blocked. Silence means it is not running.
+
+## Set up `gate.json`
+
+Run `/kkamak:init` in Claude Code for a walkthrough that detects your check command and writes the file. For the same thing without a model call, run the CLI directly — `${CLAUDE_PLUGIN_ROOT}` only resolves inside a Claude Code command body, not in a plain shell, so use a real path:
+
+```bash
+# from the installed plugin
+bun ~/.claude/plugins/cache/kkamak/kkamak/0.4.0/src/cli/init-cli.ts --check 'bun test'
+# or from a checkout
+bun /path/to/kkamak/src/cli/init-cli.ts --check 'bun test'
+```
+
+By default the CLI also adds a `.km/` line to `.gitignore` (creating the file if needed), unconditionally — pass `--no-gitignore` to skip that and manage it yourself.
+
+Or write it yourself at the repo root, next to `.git/`:
+
+```json
+{ "check": "bun test", "rounds": 2 }
+```
+
+Keep the check cheap. It runs every time the agent tries to finish a turn in which it edited a file — not once at the end of a session — so a slow check is paid over and over.
 
 | field            | required | default                     | meaning |
 |------------------|----------|------------------------------|---------|
@@ -14,56 +59,38 @@ Drop a `gate.json` in the repo root. Every field but `check` is optional:
 | `checkTimeoutMs` | no       | `300000` (5 minutes)         | Hard cap on one check run; a check that runs past this is killed and counted as a failed round. |
 | `marker`         | no       | `false`                      | If `true`, a clean accept (not a block, not an exhausted give-up) also returns a hygiene notice — advisory text saying this cycle's check evidence is closed and should not be carried into unrelated work. Same-cycle only; nothing is persisted across sessions. |
 
-Under Claude Code, keep `checkTimeoutMs` under 600000 (600s): the `Stop` hook in `hooks/hooks.json` has its own 600s timeout, and if that fires first, Claude Code kills the hook process before the gate ever gets to record a decision — fail-open still holds (no state written, no round consumed), but the check silently never gets its full configured time.
+Keep `checkTimeoutMs` under 600000 (600s): the `Stop` hook in `hooks/hooks.json` has its own 600s timeout, and if that fires first, Claude Code kills the hook process before the gate records a decision — fail-open still holds (no state written, no round consumed), but the check silently never gets its full configured time.
 
-Example:
+## What kkamak can and cannot touch
 
-```json
-{ "check": "bun test", "rounds": 2 }
-```
+kkamak never modifies your source files. It writes exactly three paths:
 
-Keep the check cheap. It runs every time the agent tries to finish a turn in which it edited a file — not just once at the end of a session — so a slow check is paid repeatedly.
+- `gate.json` — only when you run `/kkamak:init` or the init CLI, and it refuses to overwrite an existing one without `--force`.
+- `.gitignore` — only to add a `.km/` line, same occasion, never duplicated.
+- `.km/` — gitignored runtime state and the append-only sensor log.
 
-`marker: true`'s hygiene notice is delivered by both adapters, each over the channel it already uses for a block: Claude Code's `Stop` hook returns `additionalContext` under `hookSpecificOutput` — the same field the reference implementation uses for its own hygiene marker, distinct from `systemMessage` (which only surfaces as a status line rather than feeding the model's context). opencode has no such hook return value, so it continues the session with an injected `[kkamak-gate]`-prefixed message, same as a block. In both adapters `notice` and `marker` are separate channels: `notice` is diagnostic and only ever logged/surfaced as a status line, `marker` only ever reaches the model's own context. It is also always recorded on the sensor line, independent of delivery.
+kkamak has no command of its own beyond that: it reads `gate.json` and runs whatever `check` it names. Installing it and opening a repo with no `gate.json` changes nothing at all — the gate is inert until one exists.
 
-## Installing — Claude Code
+**Trust model.** That `check` command is not sandboxed. It runs as a shell command with your full user privileges, in your working directory, on every turn that edited a file — without a Claude Code permission prompt, because a `Stop` hook is not a tool call. It can do anything you can do.
 
-This repo is a Claude Code plugin: `.claude-plugin/plugin.json` is the manifest and `hooks/hooks.json` registers the three hooks (`PostToolUse` on edit tools, `UserPromptSubmit`, `Stop`), each invoking `bun src/adapters/claude-code/hook-cli.ts <EventName>`. There is no published marketplace listing yet (`package.json` is `"private": true`, and Claude Code's `plugin install` only pulls from a configured marketplace), so load this checkout directly instead:
-
-- One session only: `claude --plugin-dir /path/to/kkamak` (repeatable flag; confirmed against `claude --help`).
-- Persisted: symlink this checkout to `~/.claude/skills/kkamak`. `claude plugin init --help` documents that path as auto-loading next session as `kkamak@skills-dir` — but only for a plugin it scaffolds there itself, not one symlinked in, so confirm on first use: edit a file, end your turn, expect a block message on a failing check. Silence means it never loaded — indistinguishable from a passing check, since kkamak fails open.
-
-## Installing — opencode
-
-`src/adapters/opencode/plugin.ts` default-exports the plugin function opencode loads. Confirmed by reading opencode's own loader: it auto-loads any `.ts`/`.js` file it finds under a `plugin/`-or-`plugins/` directory — project-local (`.opencode/plugin/`) or global (`~/.config/opencode/plugin/`) — no config entry needed. There is no packaged distribution yet, so symlink (not copy) the adapter file into one of those directories:
-
-```bash
-ln -s /path/to/kkamak/src/adapters/opencode/plugin.ts .opencode/plugin/kkamak.ts
-```
-
-Confirmed by reading further into the loader: it imports whatever path the directory scan found exactly as given, without first resolving a symlink to its real path. Confirmed with a local Bun reproduction of that same mechanism: a module loaded that way still resolves its own relative imports against its real target directory, not the symlink's — so this checkout's internal imports keep working through the symlink. Not confirmed live: that opencode still expects this repo's exact plugin shape end to end. opencode has no blocking stop hook, so a block is delivered by continuing the session: the adapter injects a user message prefixed `[kkamak-gate]` carrying the check's output, rather than refusing the stop. Check this yourself on first use — edit a file and let opencode go idle; silence means the plugin never loaded, which looks exactly like a passing check since kkamak fails open.
-
-## Delivery channels
-
-`marker` and `notice` (see the `gate.json` table above and `GateDecision`'s doc comment) always deliver over separate, adapter-specific channels — never merged into one:
-
-| adapter     | marker channel                                                    | notice channel |
-|-------------|---------------------------------------------------------------------|-----------------|
-| Claude Code | `hookSpecificOutput.additionalContext` on the `Stop` hook's response | `systemMessage` |
-| opencode    | injected continuation prompt (`[kkamak-gate]`-prefixed, same mechanism a block uses) | logged only (stderr), never injected |
+`gate.json` is a repo file, so its `check` is whatever that repo contains. Treat a `gate.json` from a repo you did not write exactly as you would treat any executable script from that repo: read it before opening the repo in Claude Code.
 
 ## Turning it off
 
 The gate re-reads `gate.json` on every event and holds nothing in memory. Edit or delete it and the change applies on the very next turn — no restart, no reinstall.
 
-The gate also disarms itself: if the check *cannot be run* (a spawn failure, not a failing test) three times in a row for a session, the gate gives up on that session and allows everything through for the rest of it, with a notice telling you to check the `check` command. A normal failing check does not count toward this — only a check the gate could not execute at all.
+The gate also disarms itself: if the check *cannot be run* (a spawn failure, not a failing test) three times in a row in a session, it gives up for the rest of that session and allows everything through, with a notice telling you to check the `check` command. A normal failing check does not count toward this — only a check the gate could not execute at all.
+
+## Delivery channels
+
+`marker` and `notice` always deliver over separate channels, never merged. Under Claude Code, `marker` rides `hookSpecificOutput.additionalContext` on the `Stop` hook's response — the field that reaches the model's own context — while `notice` is diagnostic and surfaces as a `systemMessage` status line only. `marker` is recorded on the sensor line either way, independent of delivery.
 
 ## The sensor file
 
 Each completed gate cycle appends one JSON line to the sensor file (default `.km/gate-outcomes.ndjson`). Example, generated by driving the Claude Code hook CLI against a scratch repo:
 
 ```json
-{"ts":1785388549418,"sessionID":"demo-session-1","check":"test -f .fail_once && rm .fail_once && exit 1 || exit 0","accepted":true,"gateExhausted":false,"interrupted":false,"rounds":["verify-failed","accepted"],"durationMs":42,"host":"yoo-dev","app":"claude-code","checkMs":[4,4],"marker":false,"pluginVersion":"0.3.0"}
+{"ts":1785388549418,"sessionID":"demo-session-1","check":"test -f .fail_once && rm .fail_once && exit 1 || exit 0","accepted":true,"gateExhausted":false,"interrupted":false,"rounds":["verify-failed","accepted"],"durationMs":42,"host":"yoo-dev","app":"claude-code","checkMs":[4,4],"marker":false,"pluginVersion":"0.4.0"}
 ```
 
 Fields:
@@ -84,4 +111,7 @@ All optional fields may be absent from any given line; a consumer must tolerate 
 
 ## Docs
 
-Notable changes are tracked in [`CHANGELOG.md`](CHANGELOG.md).
+- [`docs/opencode.md`](docs/opencode.md) — the experimental opencode adapter.
+- [`CHANGELOG.md`](CHANGELOG.md) — notable changes.
+
+MIT licensed.
