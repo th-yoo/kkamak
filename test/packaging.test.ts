@@ -53,6 +53,25 @@ describe("Claude Code plugin manifests", () => {
     expect(entry!.source).toBe("./")
   })
 
+  // The README's sensor sample is a real line with a pluginVersion in it.
+  // Nothing else stops it from advertising a version this repo stopped
+  // shipping several releases ago.
+  test("the README's sensor sample carries the shipped version", () => {
+    const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8")
+    const versions = [...readme.matchAll(/"pluginVersion":"([^"]+)"/g)].map((m) => m[1])
+    expect(versions.length).toBeGreaterThan(0)
+    for (const version of versions) expect(version).toBe(String(read("package.json").version))
+  })
+
+  // Provenance a stranger installing from a marketplace has no other way to
+  // check: who publishes this, under what licence, from which repo.
+  test("plugin.json carries author, licence and repository", () => {
+    const plugin = read(".claude-plugin/plugin.json")
+    expect(String((plugin.author as Record<string, unknown>).name).length).toBeGreaterThan(0)
+    expect(plugin.license).toBe("MIT")
+    expect(String(plugin.repository)).toContain("github.com/th-yoo/kkamak")
+  })
+
   test("registers exactly the events the adapter handles", () => {
     const manifest = read("hooks/hooks.json") as { hooks: Record<string, unknown> }
     expect(Object.keys(manifest.hooks).sort()).toEqual([...HOOK_EVENTS].sort())
