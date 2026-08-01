@@ -61,11 +61,17 @@ that separately — leave it alone, it is not what this step is checking.)
 
 Confirm the files this release adds are present in that one version
 directory (these are new in `0.4.0`; their absence would mean the cache still
-holds a pre-0.4.0 copy despite the version string):
+holds a pre-0.4.0 copy despite the version string). Capture the directory
+step 2 already confirmed rather than retyping the version segment — the
+directory name isn't always the plugin's own version (observed in the wild:
+a git sha, or literally `unknown`, when a cache entry has no `plugin.json`
+version to read); kkamak does carry `"version": "0.4.0"`, which is what the
+`/0.4.0/` assertion above is for, but these two commands should build on that
+already-confirmed path rather than assume the segment a second time:
 
 ```bash
-ls ~/.claude/plugins/cache/kkamak/kkamak/0.4.0/src/cli/init-cli.ts
-ls ~/.claude/plugins/cache/kkamak/kkamak/0.4.0/commands/init.md
+KK=$(ls -d ~/.claude/plugins/cache/kkamak/kkamak/*/ | head -1)
+ls "$KK/src/cli/init-cli.ts" "$KK/commands/init.md"
 ```
 
 Both must exist.

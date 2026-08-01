@@ -32,11 +32,16 @@ For development against a checkout, skip the marketplace and load it directly: `
 
 ## Set up `gate.json`
 
-Run `/kkamak:init` in Claude Code for a walkthrough that detects your check command and writes the file. For the same thing without a model call:
+Run `/kkamak:init` in Claude Code for a walkthrough that detects your check command and writes the file. For the same thing without a model call, run the CLI directly — `${CLAUDE_PLUGIN_ROOT}` only resolves inside a Claude Code command body, not in a plain shell, so use a real path:
 
 ```bash
-bun "${CLAUDE_PLUGIN_ROOT}/src/cli/init-cli.ts" --check 'bun test'
+# from the installed plugin
+bun ~/.claude/plugins/cache/kkamak/kkamak/0.4.0/src/cli/init-cli.ts --check 'bun test'
+# or from a checkout
+bun /path/to/kkamak/src/cli/init-cli.ts --check 'bun test'
 ```
+
+By default the CLI also adds a `.km/` line to `.gitignore` (creating the file if needed), unconditionally — pass `--no-gitignore` to skip that and manage it yourself.
 
 Or write it yourself at the repo root, next to `.git/`:
 
@@ -58,13 +63,17 @@ Keep `checkTimeoutMs` under 600000 (600s): the `Stop` hook in `hooks/hooks.json`
 
 ## What kkamak can and cannot touch
 
-The plugin never modifies tracked files. Its entire write surface is:
+kkamak never modifies your source files. It writes exactly three paths:
 
 - `gate.json` — only when you run `/kkamak:init` or the init CLI, and it refuses to overwrite an existing one without `--force`.
 - `.gitignore` — only to add a `.km/` line, same occasion, never duplicated.
 - `.km/` — gitignored runtime state and the append-only sensor log.
 
-Everything else is read-only. kkamak reads `gate.json` and runs the check command **you** configured; it has no other command of its own. Installing it and opening a repo with no `gate.json` changes nothing at all — the gate is inert until you configure one.
+kkamak has no command of its own beyond that: it reads `gate.json` and runs whatever `check` it names. Installing it and opening a repo with no `gate.json` changes nothing at all — the gate is inert until one exists.
+
+**Trust model.** That `check` command is not sandboxed. It runs as a shell command with your full user privileges, in your working directory, on every turn that edited a file — without a Claude Code permission prompt, because a `Stop` hook is not a tool call. It can do anything you can do.
+
+`gate.json` is a repo file, so its `check` is whatever that repo contains. Treat a `gate.json` from a repo you did not write exactly as you would treat any executable script from that repo: read it before opening the repo in Claude Code.
 
 ## Turning it off
 

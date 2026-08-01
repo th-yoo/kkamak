@@ -2,7 +2,7 @@
 /**
  * init-cli.ts — token-free `gate.json` initializer.
  *
- *   bun src/cli/init-cli.ts [--check <cmd>] [--force] [--dry-run]
+ *   bun src/cli/init-cli.ts [--check <cmd>] [--force] [--dry-run] [--no-gitignore]
  *
  * The `/kkamak:init` slash command walks a user through the same decision
  * with a model in the loop; this does the common case — detect a check
@@ -20,6 +20,7 @@ interface ParsedArgs {
   checkOverride: string | undefined
   force: boolean
   dryRun: boolean
+  noGitignore: boolean
 }
 
 /** Pure argv parser. Unknown flags are ignored. */
@@ -27,6 +28,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let checkOverride: string | undefined
   let force = false
   let dryRun = false
+  let noGitignore = false
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === "--check") {
@@ -36,9 +38,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
       force = true
     } else if (a === "--dry-run") {
       dryRun = true
+    } else if (a === "--no-gitignore") {
+      noGitignore = true
     }
   }
-  return { checkOverride, force, dryRun }
+  return { checkOverride, force, dryRun, noGitignore }
 }
 
 /**
@@ -107,7 +111,7 @@ function main(): void {
     console.error("init-cli: no check command detected in package.json (scripts.test) or bun.lock/@types/bun.")
     console.error("Pass --check '<your verification command>' to set one explicitly. Template:")
     console.error(TEMPLATE)
-    console.error("Usage: bun src/cli/init-cli.ts --check '<cmd>' [--force] [--dry-run]")
+    console.error("Usage: bun src/cli/init-cli.ts --check '<cmd>' [--force] [--dry-run] [--no-gitignore]")
     process.exit(1)
   }
 
@@ -120,7 +124,7 @@ function main(): void {
   }
 
   fs.writeFileSync(gatePath, json)
-  ensureGitignoreHasKm(cwd)
+  if (!args.noGitignore) ensureGitignoreHasKm(cwd)
   console.log(`gate.json written at ${gatePath}:`)
   console.log(json)
 }

@@ -216,3 +216,29 @@ test(".gitignore already carrying .km/ -> not duplicated", async () => {
     rmRepo(repo)
   }
 })
+
+// I3 (final review): the CLI's unconditional gitignore write disagreed with
+// commands/init.md's opt-in prompt. --no-gitignore lets a caller skip it.
+test("--no-gitignore skips writing .gitignore, gate.json still written", async () => {
+  const repo = mkRepo()
+  try {
+    const r = await runInit({ cwd: repo, args: ["--check", "npm test", "--no-gitignore"] })
+    expect(r.exitCode).toBe(0)
+    expect(fs.existsSync(path.join(repo, "gate.json"))).toBe(true)
+    expect(fs.existsSync(path.join(repo, ".gitignore"))).toBe(false)
+  } finally {
+    rmRepo(repo)
+  }
+})
+
+test("--no-gitignore leaves an existing .gitignore untouched", async () => {
+  const repo = mkRepo()
+  try {
+    fs.writeFileSync(path.join(repo, ".gitignore"), "node_modules/\n")
+    const r = await runInit({ cwd: repo, args: ["--check", "npm test", "--no-gitignore"] })
+    expect(r.exitCode).toBe(0)
+    expect(readGitignore(repo)).toBe("node_modules/\n")
+  } finally {
+    rmRepo(repo)
+  }
+})
