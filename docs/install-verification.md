@@ -100,6 +100,19 @@ Both must exist.
 This proves the installed copy is actually wired into a Claude Code session
 and produces a real block — not just that files were copied.
 
+**macOS limitation, confirmed:** this step cannot complete on macOS under the
+isolated `CLAUDE_CONFIG_DIR` from step 0. Claude Code's oauth credential on
+macOS lives in the Keychain, not in config-dir state, and a fresh, isolated
+config has no path to it — a `claude -p` turn run this way fails before it
+ever reaches the model. On macOS, skip to the **Container variant** below
+instead, which handles this by exporting the Keychain credential explicitly
+into the container. On Linux, where the credential is a real file at
+`~/.claude/.credentials.json`, this step's isolation problem doesn't apply to
+auth the same way — `CLAUDE_CONFIG_DIR` still isolates plugin/marketplace
+state as step 0 describes, but a Linux maintainer should confirm their own
+non-interactive auth path (e.g. `ANTHROPIC_API_KEY`) works under the isolated
+config before relying on this step as written.
+
 ```bash
 mkdir -p /tmp/kkamak-install-check
 cd /tmp/kkamak-install-check
@@ -148,6 +161,156 @@ touched:
 rm -rf /tmp/kkamak-install-check
 rm -rf "$CLAUDE_CONFIG_DIR"
 unset CLAUDE_CONFIG_DIR
+```
+
+## Container variant (proven) — full model-driven proof on a clean Linux machine
+
+Run this instead of step 3 on macOS (see the limitation noted there), or
+whenever you want the strongest form of this proof: a real Claude Code agent
+turn, on a genuinely clean Linux machine, with no host toolchain to
+accidentally lean on. **Proven live**, not just authored: kkamak 0.4.0
+blocked a real agent turn on a clean `ubuntu:24.04` container — the agent
+tried to end its turn, was blocked, retried, was blocked again, and the
+second failure exhausted the `rounds: 1` budget and wrote a sensor line with
+`gateExhausted: true`, two `"verify-failed"` entries in `rounds`, and
+`pluginVersion: "0.4.0"` — the same evidence step 3 above describes, produced
+by an actual model turn instead of a human driving `claude` interactively.
+
+Uses this project's own podman pattern (persistent container: create with
+`sleep infinity`, `start`, `exec` per step, `rm -f -t 0` at the end — see
+`meta-harness/opencode-plugin/src/bench/sandbox.ts`'s `buildCreateArgv` if
+you have that repo checked out; not required to run this). Installs *only*
+what's needed to test the documented install path — the README's one stated
+prerequisite (`bun`) plus what it takes to get the `claude` CLI itself —
+never the maintainer's own pre-built toolchain image, so the run actually
+exercises what a stranger's clean machine needs.
+
+```bash
+export PATH=/opt/podman/bin:$PATH   # wherever your podman lives; adjust or omit
+podman machine start                # if not already running
+
+NAME=kkamak-install-proof
+podman rm -f -t 0 "$NAME" 2>/dev/null
+podman create --name "$NAME" --init -e IS_SANDBOX=1 \
+  docker.io/library/ubuntu:24.04 sleep infinity
+podman start "$NAME"
+podman exec "$NAME" mkdir -p /app
+```
+
+**Auth mounts — the corrected, proven recipe.** This project already has
+this exact recipe for a different purpose (`prepareClaudeCodeAuth` in
+`meta-harness/opencode-plugin/src/bench/agent-auth.ts`); use it as written,
+don't improvise from doc comments alone as an earlier pass at this runbook
+did (that attempt mounted only `.credentials.json` read-only and got the
+onboarding file's contents wrong — both looked reasonable and both broke the
+proof). The two mounts that actually work:
+
+1. **`/root/.claude`, the whole directory, read-write, not read-only, and not
+   just the one file.** Claude Code rotates its oauth refresh token and
+   writes settings during a session; a read-only mount fails silently once
+   the session runs past the first few seconds. On macOS there is no
+   `.credentials.json` on disk — auth is Keychain-only — so export it into a
+   throwaway directory and mount that:
+
+   ```bash
+   TMPROOT=$(mktemp -d "${TMPDIR:-/tmp}kkamak-cc-auth-XXXXXX")
+   chmod 700 "$TMPROOT"
+   CLAUDE_DIR="$TMPROOT/claude"
+   mkdir -p "$CLAUDE_DIR" && chmod 700 "$CLAUDE_DIR"
+   security find-generic-password -s "Claude Code-credentials" -w > "$CLAUDE_DIR/.credentials.json"
+   chmod 600 "$CLAUDE_DIR/.credentials.json"
+   ```
+
+   The refresh token the container rotates to is discarded, not written back
+   to the Keychain — fine for one proof run, not a durable credential store.
+   On Linux, skip the export and mount the real `~/.claude` directly.
+
+2. **`/root/.claude.json`, read-only, containing exactly
+   `{"hasCompletedOnboarding":true}`.** This is Claude Code's headless
+   first-run gate — a fresh config with no onboarding record fails before
+   ever reaching the model. Nothing else belongs in this file: putting an
+   `oauthAccount` blob here (the earlier, wrong attempt) produces
+   "configuration file is corrupted", not a working session.
+
+   ```bash
+   printf '%s' '{"hasCompletedOnboarding":true}' > "$TMPROOT/claude.json"
+   chmod 600 "$TMPROOT/claude.json"
+   ```
+
+Recreate the container with both mounts (the whole `.claude` dir rw, the
+onboarding file ro), plus `-e IS_SANDBOX=1` — Claude Code requires that env
+var to accept `--dangerously-skip-permissions` while running as the
+container's root user:
+
+```bash
+podman rm -f -t 0 "$NAME"
+podman create --name "$NAME" --init \
+  -v "$CLAUDE_DIR:/root/.claude" \
+  -v "$TMPROOT/claude.json:/root/.claude.json:ro" \
+  -e IS_SANDBOX=1 \
+  docker.io/library/ubuntu:24.04 sleep infinity
+podman start "$NAME"
+podman exec "$NAME" mkdir -p /app
+```
+
+Install only `bun` (the README's stated prerequisite) and what it takes to
+get the `claude` CLI — nothing else:
+
+```bash
+podman exec -w /app "$NAME" bash -c \
+  'apt-get update -qq && apt-get install -y -qq curl ca-certificates git unzip'
+podman exec -w /app "$NAME" bash -c 'curl -fsSL https://bun.sh/install | bash'
+podman exec -w /app "$NAME" bash -c 'curl -fsSL https://claude.ai/install.sh | bash'
+```
+
+`podman exec` doesn't source `.bashrc`, so pass `PATH` explicitly on every
+following exec:
+
+```bash
+CPATH="/root/.local/bin:/root/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+podman exec -e PATH="$CPATH" -w /app "$NAME" claude plugin marketplace add th-yoo/kkamak
+podman exec -e PATH="$CPATH" -w /app "$NAME" claude plugin install kkamak@kkamak
+podman exec -e PATH="$CPATH" -w /app "$NAME" bash -c \
+  'ls -d /root/.claude/plugins/cache/kkamak/kkamak/*/'
+```
+
+Then the scratch repo with a check that can never pass, same as step 3:
+
+```bash
+podman exec -e PATH="$CPATH" -w /app "$NAME" bash -c '
+  mkdir -p /root/kkamak-check && cd /root/kkamak-check
+  git init -q && git config user.email t@t.com && git config user.name t
+  echo "{ \"check\": \"exit 1\", \"rounds\": 1 }" > gate.json
+'
+```
+
+And the real agent turn — `--dangerously-skip-permissions` is required (the
+container has no human to approve tool calls) alongside `IS_SANDBOX=1`
+(already set at container-create time above):
+
+```bash
+podman exec -e PATH="$CPATH" -w /root/kkamak-check "$NAME" \
+  claude -p "Create a file named scratch.txt containing the word hi, then finish." \
+  --dangerously-skip-permissions
+```
+
+Expect the agent to try, get blocked, try again, and get exhausted — read
+the sensor line the same way step 3 does:
+
+```bash
+podman exec -e PATH="$CPATH" "$NAME" cat /root/kkamak-check/.km/gate-outcomes.ndjson
+```
+
+`gateExhausted: true`, `rounds` listing two `"verify-failed"` entries,
+`pluginVersion: "0.4.0"`.
+
+**Cleanup — shred the credential export, then remove the container:**
+
+```bash
+SIZE=$(stat -f%z "$CLAUDE_DIR/.credentials.json" 2>/dev/null || stat -c%s "$CLAUDE_DIR/.credentials.json")
+printf '0%.0s' $(seq 1 "$SIZE") > "$CLAUDE_DIR/.credentials.json"
+rm -rf "$TMPROOT"
+podman rm -f -t 0 "$NAME"
 ```
 
 ## Warning: reinstalling while a session is live
