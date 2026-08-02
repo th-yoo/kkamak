@@ -56,6 +56,26 @@ const REQUIRED_FIELDS = [
 const ROUND_VOCAB: readonly RoundOutcome[] = ["verify-failed", "accepted"]
 
 /**
+ * Locates each named vector's string literal inside the meta-harness
+ * counterpart source. Throws if the counterpart exists but a name can't be
+ * found — a reformat of the counterpart must disarm the guard loudly, not
+ * silently pass. Absence of the counterpart file itself is handled by the
+ * caller (existsSync check), not here.
+ */
+function locateVectorLines(src: string, names: readonly string[]): string[] {
+  const lines: string[] = []
+  for (const name of names) {
+    const re = new RegExp(`${name}\\s*=\\s*\\n?\\s*'([^']*)'`)
+    const m = src.match(re)
+    if (!m) {
+      throw new Error(`could not locate ${name} in counterpart source`)
+    }
+    lines.push(m[1]!)
+  }
+  return lines
+}
+
+/**
  * Schema-level conformance: required fields present with the right types and
  * casing, rounds drawn from the frozen vocabulary, and the D1-deferred
  * optionals absent. This is NOT a byte-compare against the golden vectors —
@@ -234,6 +254,12 @@ describe("sensor contract: golden vector fixture", () => {
   // Advisory, mirroring the check meta-harness's own parity test does in the
   // other direction (D2). Not authoritative here — the meta-harness test is
   // — but a local guard is cheap and fails loudly on the same drift.
+  //
+  // Skip vs. fail distinction is deliberate: counterpart file ABSENT (public
+  // standalone checkout, no meta-harness sibling) is not a failure — skip.
+  // Counterpart file PRESENT but a vector name unlocatable means the
+  // counterpart was reformatted out from under this guard — that must FAIL,
+  // not silently pass, or the guard is disarmed while still reporting green.
   test("fixture byte-matches the meta-harness counterpart when present", () => {
     const counterpart = path.join(
       import.meta.dir,
@@ -250,18 +276,23 @@ describe("sensor contract: golden vector fixture", () => {
     }
     const src = readFileSync(counterpart, "utf-8")
     const names = ["CLEAN_ACCEPT", "CATCH_BLOCK_THEN_FIX", "EXHAUSTED", "SKIPPED_STOP_DIAGNOSTIC"]
-    const lines: string[] = []
-    for (const name of names) {
-      const re = new RegExp(`${name}\\s*=\\s*\\n?\\s*'([^']*)'`)
-      const m = src.match(re)
-      if (!m) {
-        console.log(`[sensor-contract] advisory check SKIPPED: could not locate ${name} in ${counterpart}.`)
-        return
-      }
-      lines.push(m[1]!)
-    }
+    const lines = locateVectorLines(src, names)
     const theirs = lines.join("\n") + "\n"
     const ours = readFileSync(FIXTURE, "utf-8")
     expect(ours).toBe(theirs)
+  })
+})
+
+describe("locateVectorLines: guards the advisory check from silently disarming", () => {
+  test("throws when a vector name cannot be located in the counterpart source", () => {
+    const src = `const CLEAN_ACCEPT =\n  '{"a":1}'\nconst OTHER = 'x'\n`
+    expect(() => locateVectorLines(src, ["CLEAN_ACCEPT", "MISSING_NAME"])).toThrow(
+      /could not locate MISSING_NAME/,
+    )
+  })
+
+  test("returns matched string literals in requested order when all names are present", () => {
+    const src = `const B =\n  'second'\nconst A =\n  'first'\n`
+    expect(locateVectorLines(src, ["A", "B"])).toEqual(["first", "second"])
   })
 })
