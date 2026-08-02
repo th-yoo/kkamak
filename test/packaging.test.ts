@@ -44,6 +44,15 @@ describe("Claude Code plugin manifests", () => {
     expect(String((marketplace.owner as Record<string, unknown>).name).length).toBeGreaterThan(0)
   })
 
+  // Known issue 1 (docs/known-issues.md): marketplace.json had neither
+  // field. $schema buys editor/CI validation for free; description is what
+  // a marketplace browser shows before a reader opens any plugin entry.
+  test("marketplace.json carries a $schema and a top-level description", () => {
+    const marketplace = read(".claude-plugin/marketplace.json")
+    expect(marketplace.$schema).toBe("https://anthropic.com/claude-code/marketplace.schema.json")
+    expect(String(marketplace.description).length).toBeGreaterThan(0)
+  })
+
   test("marketplace.json lists this plugin at the repo root", () => {
     const marketplace = read(".claude-plugin/marketplace.json") as { plugins: Record<string, unknown>[] }
     const entry = marketplace.plugins.find((p) => p.name === read(".claude-plugin/plugin.json").name)

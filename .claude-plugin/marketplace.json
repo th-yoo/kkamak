@@ -1,5 +1,7 @@
 {
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "kkamak",
+  "description": "kkamak completion gate — Claude Code cannot say done until your check passes",
   "owner": {
     "name": "th-yoo"
   },

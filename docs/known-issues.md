@@ -4,12 +4,20 @@ These came out of the 0.4.0 pre-release review. All were judged Minor: none
 of them block using kkamak, and none were fixed as part of that review —
 they are recorded here so the judgement is visible, not silently acted on.
 
-## 1. `.claude-plugin/marketplace.json` has no `$schema` or top-level `description`
+## 1. `.claude-plugin/marketplace.json` has no `$schema` or top-level `description` — RESOLVED
 
 Judged minor because the marketplace still works without either — `claude
 plugin marketplace add` doesn't require them. Worth having anyway: `$schema`
 buys editor and CI validation for free, and other working marketplaces on
 the maintainer's own machine carry both fields.
+
+Resolved: both fields added. `$schema` is
+`https://anthropic.com/claude-code/marketplace.schema.json`, confirmed
+against the official `claude-plugins-official` and third-party `caveman`
+marketplaces installed on the maintainer's machine, which both point at the
+same URL. `description` mirrors `plugin.json`'s. Pinned by
+`test/packaging.test.ts`'s "marketplace.json carries a $schema and a
+top-level description" test.
 
 ## 2. `CHANGELOG.md` files every 0.4.0 entry under `### Added`
 
