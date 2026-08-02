@@ -31,13 +31,18 @@ under each entry is accurate regardless of which heading it sits under, and
 the gap has an obvious one-line explanation that just hasn't been written
 yet: 0.4.0 is the first public release; 0.1-0.3 were never released.
 
-## 3. `package.json`'s description uses "an agent" instead of "Claude Code"
+## 3. `package.json`'s description uses "an agent" instead of "Claude Code" — RESOLVED
 
 `package.json:5` reads "an agent cannot say done…" where `.claude-plugin/
 plugin.json` and `.claude-plugin/marketplace.json` both say "Claude Code
 cannot say done…". Judged minor because `package.json` is `"private": true`
 and never published to npm, so this description is not user-facing in
 practice — but it's the one place the CC-first framing slips.
+
+Resolved: `package.json` now reads "Claude Code cannot say done…", matching
+`plugin.json` and `marketplace.json` verbatim. Pinned by
+`test/packaging.test.ts`'s "package.json, plugin.json and marketplace.json
+descriptions agree" test.
 
 ## 4. README's gate.json placement instructions describe the wrong directory
 

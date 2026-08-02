@@ -3,7 +3,7 @@
   "version": "0.4.0",
   "private": true,
   "type": "module",
-  "description": "kkamak completion gate — an agent cannot say done until your check passes",
+  "description": "kkamak completion gate — Claude Code cannot say done until your check passes",
   "main": "./src/kernel/index.ts",
   "scripts": {
     "test": "bun test",

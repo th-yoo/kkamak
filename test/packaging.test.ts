@@ -28,6 +28,18 @@ describe("Claude Code plugin manifests", () => {
     expect(read(".claude-plugin/plugin.json").version).toBe(read("package.json").version)
   })
 
+  // Known issue 3 (docs/known-issues.md): package.json said "an agent"
+  // where plugin.json/marketplace.json said "Claude Code". All three
+  // manifests describe the same product to a reader — they must agree.
+  test("package.json, plugin.json and marketplace.json descriptions agree", () => {
+    const pkg = String(read("package.json").description)
+    const plugin = String(read(".claude-plugin/plugin.json").description)
+    const marketEntry = (read(".claude-plugin/marketplace.json") as { plugins: Record<string, unknown>[] })
+      .plugins.find((p) => p.name === "kkamak")
+    expect(pkg).toBe(plugin)
+    expect(String(marketEntry!.description)).toBe(plugin)
+  })
+
   // KERNEL_VERSION is a literal (sensor.ts stays I/O-free) rather than read
   // from package.json at runtime, so it can silently drift on a version
   // bump. This guards it the same way the plugin.json check above does.
