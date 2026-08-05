@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -293,6 +293,20 @@ describe("createNodeHost", () => {
 
   test("a logger failure is the caller's problem, not the kernel's — it must not throw here", () => {
     const host = createNodeHost({ root: dir, app: "x" })
-    expect(() => host.logger.log("hello")).not.toThrow()
+    // Captured, not silenced: StderrLogger really writes, and letting it
+    // write here leaks a bare "hello" into every test run's output where it
+    // is indistinguishable from a real diagnostic (docs/known-issues.md #7).
+    // Asserting on the spy also makes this test prove delivery, which the
+    // not-to-throw assertion alone never did.
+    const write = spyOn(process.stderr, "write").mockImplementation(() => true)
+    try {
+      expect(() => host.logger.log("hello")).not.toThrow()
+      // Assert INSIDE the try: mockRestore() clears the call record, so
+      // asserting after the finally sees zero calls and fails.
+      expect(write).toHaveBeenCalledTimes(1)
+      expect(String(write.mock.calls[0]![0])).toBe("hello\n")
+    } finally {
+      write.mockRestore()
+    }
   })
 })
