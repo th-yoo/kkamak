@@ -49,6 +49,65 @@ the day's sensor numbers, and mechanism observations the sensor stream
 cannot see (behavioral shifts, qualitative saves, instrument anomalies).
 This file is proposer evidence — keep entries factual and dated.
 
+## 2026-08-05 — 0.4.1 review-debt paydown (yoo-dev)
+
+Executed the `docs/superpowers/plans/2026-08-05-kkamak-0.4.1-review-debt.md`
+plan: paid down the five open `docs/known-issues.md` entries (#2, #4, #5,
+#6, #7) the 0.4.0 pre-release review recorded as Minor and left unfixed,
+and cut the 0.4.1 release. No behavior changes — docs, tests, comments,
+and version strings only.
+
+- **Sensor numbers, measured** — window `2026-08-05T00:00:00` local to now,
+  from `.km/gate-outcomes.ndjson`, this session's own extractor script:
+  `totalLines 7, gateCycles 6, clean 6, catch 0, exhausted 0, preempted 0,
+  unclassified 0, skippedStop 0, nonCycleLines 1, medianCheckMs 2428,
+  pluginVersions ["0.2.1"], sessions 1`. `gateCycles + skippedStop +
+  nonCycleLines` = `6 + 0 + 1` = `7` = `totalLines`, checked. Every cycle
+  this session accepted on the first round; nothing blocked, nothing
+  exhausted.
+- **`pluginVersion` observation.** The stream still stamps `"0.2.1"` — the
+  installed private `cc-gate-plugin` research build driving this repo's own
+  gate, not this checkout at 0.4.1. Lines in this repo's own sensor stream
+  do not report the version of the code in this repo's working tree; reading
+  them as evidence about 0.4.1's behavior would be wrong.
+- **Suite:** 315 at `c5f8600` → 319 after Task 1 (one new `FileConfigSource`
+  test pinning that `gate.json` is read from the launch cwd and never
+  resolved upward, plus a three-case `test.each` over `HOOK_EVENTS` pinning
+  the same claim on the adapter side) → 319 unchanged through Tasks 2-6
+  (Task 2 replaced one test with one test; Tasks 3-6 are docs/version only).
+  `bunx tsc --noEmit` clean at every task boundary.
+- **Mechanism observation: known issue #4 was invisible to the instrument,
+  by construction.** It was a documentation claim (`README.md` said `gate.json`
+  lives at the repo root) that the code contradicted (it's read from the
+  launch cwd) — found by review, not by any gate cycle. The gate behaved
+  correctly the entire time the wrong sentence sat in the README, so no
+  sensor line, however read, could ever have surfaced it. A limit of the
+  instrument: it measures whether the gate did its job, not whether the
+  docs describe the gate correctly.
+- **The review loop that produced this release's plan, as measured `n=1`
+  evidence.** Descriptive only — not a control arm, not a §4.3 claim, and
+  nothing about `ralph-loop` is adoptable from this one run. The plan was
+  produced by a `ralph-loop` run of 3 iterations (its cap), dispatching 4
+  independent `code-architect` passes, folding roughly 25 findings back in.
+  Per the plan's own Review record, at least 9 of those 25 were iatrogenic
+  rather than discovered — repairs of defects a previous round's own
+  folding had introduced (5 found in round 2, 4 in round 3). After the loop
+  hit its cap, an external lab pass found 4 more (two wrong counts, one
+  execution-seam ambiguity, one block-versus-prose disagreement).
+  Per-pass yield ran 6, 5, 4, 4. The mechanism observation that matters:
+  zero of those findings came from a sensor line — the gate ran green
+  through the entire arc, because nothing was ever broken, so known issue
+  4 (a documentation claim the code contradicted) was invisible to the
+  instrument by construction, same as the bullet above. Confound worth
+  recording for anyone reading this window later: the session model
+  switched Opus 5 → Sonnet 5 partway through this release, between the plan
+  being reviewed/committed and Tasks 3-7 being executed.
+- **Runbook status:** Task 6 Step 6 (7a) re-pointed `docs/install-verification.md`
+  at 0.4.1 and committed that on its own, before the release commit. Step 8
+  (7b) — a human executing the runbook on a real machine — has **not**
+  happened as of this entry. Installability is unproven; a green suite is
+  not evidence of it.
+
 ## 2026-07-31 — CHANGELOG.md added (yoo-dev)
 
 `CHANGELOG.md` now exists at the repo root, keep-a-changelog format, one
