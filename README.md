@@ -115,5 +115,6 @@ All optional fields may be absent from any given line; a consumer must tolerate 
 
 - [`docs/opencode.md`](docs/opencode.md) — the experimental opencode adapter.
 - [`CHANGELOG.md`](CHANGELOG.md) — notable changes.
+- [`docs/install-verification.md`](docs/install-verification.md) — the runbook a maintainer executes on a real machine after cutting a release, to prove the published plugin actually installs and blocks. Not needed to *use* kkamak.
 
 MIT licensed.
