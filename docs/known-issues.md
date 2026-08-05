@@ -19,7 +19,7 @@ same URL. `description` mirrors `plugin.json`'s. Pinned by
 `test/packaging.test.ts`'s "marketplace.json carries a $schema and a
 top-level description" test.
 
-## 2. `CHANGELOG.md` files every 0.4.0 entry under `### Added`
+## 2. `CHANGELOG.md` files every 0.4.0 entry under `### Added` — RESOLVED
 
 Entries like "Bump version to 0.4.0…" and "Rewrite the README…" (lines 8-19)
 are changes to existing things, which [Keep a
@@ -30,6 +30,10 @@ at 0.4.0 with no explanation of the gap. Judged minor because the content
 under each entry is accurate regardless of which heading it sits under, and
 the gap has an obvious one-line explanation that just hasn't been written
 yet: 0.4.0 is the first public release; 0.1-0.3 were never released.
+
+Resolved: the two change-shaped 0.4.0 entries moved under a new `### Changed`
+heading; the header now states that 0.4.0 is the first public release and
+0.1-0.3 were never released. Nothing pins this; it is prose.
 
 ## 3. `package.json`'s description uses "an agent" instead of "Claude Code" — RESOLVED
 
@@ -44,7 +48,7 @@ Resolved: `package.json` now reads "Claude Code cannot say done…", matching
 `test/packaging.test.ts`'s "package.json, plugin.json and marketplace.json
 descriptions agree" test.
 
-## 4. README's gate.json placement instructions describe the wrong directory
+## 4. README's gate.json placement instructions describe the wrong directory — RESOLVED
 
 `README.md`'s "Set up `gate.json`" section says to put the file "at the repo
 root, next to `.git/`." In fact `gate.json` is read from the Claude Code
@@ -58,7 +62,23 @@ put `cwd` and repo root in the same place, so most readers never hit the
 discrepancy; a clearer clause would read "…at the directory you launch
 Claude Code from (normally the repo root)."
 
-## 5. README's Docs section doesn't link `docs/install-verification.md`
+Resolved. `README.md` now reads: "Or write it yourself at the directory you
+launch Claude Code from — normally the repo root:" — an em-dash
+construction, not the parenthetical this issue's text speculatively
+proposed. A following paragraph explains that the gate never searches
+upward; the `sensor` field-table row was corrected the same way; the same
+wrong claim was fixed in `commands/init.md` (two places) and in doc
+comments on `src/runtime/config-source.ts`, `src/runtime/index.ts` (two
+places), and `src/kernel/ports.ts`. The opencode adapter's `worktree`
+comment (`src/adapters/opencode/opencode-types.ts:27`) was deliberately
+left — its root genuinely is a repo root there. `src/runtime/
+ndjson-sink.ts:26`'s error string was deliberately left, being
+program-visible output. Pinned by `test/runtime.test.ts`'s "does not walk
+upward: a gate.json in the parent is invisible from a subdirectory root"
+test and `test/claude-code-adapter.test.ts`'s "carries the payload cwd
+through as root, verbatim" test.
+
+## 5. README's Docs section doesn't link `docs/install-verification.md` — RESOLVED
 
 `README.md`'s Docs section links `docs/opencode.md` and `CHANGELOG.md` but
 not the install-verification runbook. Judged minor because omitting it may
@@ -66,7 +86,10 @@ be intentional — the runbook is maintainer-only in the sense that a maintainer
 not an end user, runs it after cutting a release — but that intent isn't
 stated anywhere, so a reader can't tell the omission from an oversight.
 
-## 6. `docs/dogfood-log.md` is opaque to readers outside the private meta-harness repo
+Resolved: README's Docs section now links `docs/install-verification.md`
+and states it is maintainer-scoped.
+
+## 6. `docs/dogfood-log.md` is opaque to readers outside the private meta-harness repo — RESOLVED
 
 `CHANGELOG.md` sends public readers to `docs/dogfood-log.md` for entry
 details, and that file references the private `meta-harness` repo 13 times
@@ -75,7 +98,11 @@ resolve. Judged minor because nothing in the file is incorrect — it's an
 honest log of what happened — it's just written for an audience with access
 this repo's public readers don't have.
 
-## 7. A stray `hello` line leaks to stderr during the test run
+Resolved: `docs/dogfood-log.md` opens with a preamble declaring its audience
+and stating that its `meta-harness` citations resolve only in a private
+repo. The citations themselves were kept.
+
+## 7. A stray `hello` line leaks to stderr during the test run — RESOLVED
 
 `test/runtime.test.ts:283` calls `host.logger.log("hello")` to assert a
 logger failure doesn't throw, and that call's own output (`hello`) leaks to
@@ -83,6 +110,10 @@ stderr rather than being captured — so every `bun test` run, including CI,
 prints a bare `hello` line above the pass/fail summary. Judged minor because
 it's purely cosmetic: the line carries no information and doesn't affect the
 test's pass/fail result.
+
+Resolved: `test/runtime.test.ts`'s logger test now spies on
+`process.stderr.write` and asserts the delivered message, so no bare
+`hello` reaches the run's output.
 
 ## Regression: `gate.json`'s `gauge` field was wrongly removed, then restored
 
