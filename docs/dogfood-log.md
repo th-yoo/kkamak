@@ -1,5 +1,22 @@
 # Dogfood log
 
+**Who this is for.** This is the maintainer's working log of running kkamak
+on kkamak: one dated entry per session, carrying that session's sensor
+numbers and the mechanism observations the sensor stream cannot see. It is
+proposer evidence for a measurement process, not documentation of the
+plugin — nothing here is needed to install or use kkamak, and nothing here
+is a promise about how kkamak behaves.
+
+**It references a private repo.** Entries below cite `meta-harness` — a
+separate, unpublished repository holding the measurement harness, its
+pre-registration (§4.3), its round ledgers, and the committed sensor
+evidence snapshots. Round numbers, section references, and the
+`evidence/…` path resolve only there. If you are reading this without access to that repo,
+those citations are dead ends by design: they are recorded so the
+maintainer's own claims stay auditable, not to send you anywhere. The
+factual content of each entry — what changed, what the numbers were, what
+was observed — stands on its own without them.
+
 ## BASELINE — sealed 2026-07-30, BEFORE any km-crank round on this repo
 
 Frozen descriptive anchor of the pre-crank state. Everything below was
