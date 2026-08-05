@@ -65,11 +65,33 @@ and version strings only.
   nonCycleLines` = `6 + 0 + 1` = `7` = `totalLines`, checked. Every cycle
   this session accepted on the first round; nothing blocked, nothing
   exhausted.
-- **`pluginVersion` observation.** The stream still stamps `"0.2.1"` — the
-  installed private `cc-gate-plugin` research build driving this repo's own
-  gate, not this checkout at 0.4.1. Lines in this repo's own sensor stream
-  do not report the version of the code in this repo's working tree; reading
-  them as evidence about 0.4.1's behavior would be wrong.
+- **`pluginVersion` observation — corrected.** Within the window measured
+  above, the stream stamped `"0.2.1"` — the installed private
+  `cc-gate-plugin` research build driving this repo's own gate, not this
+  checkout at 0.4.1. That was true of the window, not a standing fact: a
+  later line in the same file stamps `"0.3.0"`, first at `ts 1785930930213`
+  (2026-08-05 20:55:30 local, `rounds ["accepted"]`, `checkMs 2538`) — this
+  repo stream's regime boundary; never pool across it. Re-counted directly
+  against `.km/gate-outcomes.ndjson` as of this correction: `0.2.0` × 10,
+  `0.2.1` × 58, `0.3.0` × 2 (70 lines total). The cause was **not** a stale
+  install: `installed_plugins.json` had shown `kkamak@kkamak-local` at
+  `0.3.0` since `2026-08-05T03:10:11Z`, cached `gitCommitSha ffb8d00`, zero
+  `cc-gate-plugin` commits after it — the install was current the whole
+  time this entry's window was measured. `readPluginVersion()`
+  (`cc-gate-plugin/src/sensor-append.ts`, module-relative via
+  `import.meta.dir`) caches once per process, so a session started before
+  the install kept stamping `0.2.1` until it exited; the lines were
+  correct about which build produced them, the stale thing was the
+  process, not the cache. Worth recording as a trap, not just a doc fix:
+  `sessionID 79967164-a751-4daa-a3c4-6bfffb594bd7` appears on **both**
+  sides of the boundary, stamping `0.2.1` and `0.3.0` — confirmed by
+  direct query against the file. `/exit` plus resume preserves the session
+  id while starting a new process with a newly-read version, so
+  `sessionID` is not a valid key for partitioning build regimes; only the
+  `pluginVersion` stamp and its `ts` boundary are. Lines in this repo's own
+  sensor stream still do not report the version of the code in this repo's
+  working tree either way; reading them as evidence about 0.4.1's behavior
+  would be wrong regardless of which regime produced them.
 - **Suite:** 315 at `c5f8600` → 319 after Task 1 (one new `FileConfigSource`
   test pinning that `gate.json` is read from the launch cwd and never
   resolved upward, plus a three-case `test.each` over `HOOK_EVENTS` pinning
