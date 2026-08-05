@@ -43,11 +43,13 @@ bun /path/to/kkamak/src/cli/init-cli.ts --check 'bun test'
 
 By default the CLI also adds a `.km/` line to `.gitignore` (creating the file if needed), unconditionally — pass `--no-gitignore` to skip that and manage it yourself.
 
-Or write it yourself at the repo root, next to `.git/`:
+Or write it yourself at the directory you launch Claude Code from — normally the repo root:
 
 ```json
 { "check": "bun test", "rounds": 2 }
 ```
+
+That location is not a guess: the gate reads `gate.json` from the working directory Claude Code reports in its hook payload, and never searches upward from it. Launch Claude Code from a subdirectory that has no `gate.json` and the gate finds no config and does nothing — which, per "Confirm it loaded" above, looks exactly like a check that always passes.
 
 Keep the check cheap. It runs every time the agent tries to finish a turn in which it edited a file — not once at the end of a session — so a slow check is paid over and over.
 
@@ -55,7 +57,7 @@ Keep the check cheap. It runs every time the agent tries to finish a turn in whi
 |------------------|----------|------------------------------|---------|
 | `check`          | yes      | —                            | Shell command to run as the completion check. A config with no non-empty `check` string disables the gate entirely (no-op). |
 | `rounds`         | no       | `2`                          | How many failing checks the gate will block on before giving up. `rounds: 2` means: the first and second failing checks each produce a block, and the third failing check is allowed through. `rounds: 0` is observe-only — the check still runs and is recorded, but the very first failure is let through unblocked. |
-| `sensor`         | no       | `.km/gate-outcomes.ndjson`   | Where outcome lines are appended, relative to the repo root. |
+| `sensor`         | no       | `.km/gate-outcomes.ndjson`   | Where outcome lines are appended, relative to the directory Claude Code was launched from (the same directory `gate.json` is read from). |
 | `checkTimeoutMs` | no       | `300000` (5 minutes)         | Hard cap on one check run; a check that runs past this is killed and counted as a failed round. |
 | `marker`         | no       | `false`                      | If `true`, a clean accept (not a block, not an exhausted give-up) also returns a hygiene notice — advisory text saying this cycle's check evidence is closed and should not be carried into unrelated work. Same-cycle only; nothing is persisted across sessions. |
 

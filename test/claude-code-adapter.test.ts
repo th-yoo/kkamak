@@ -16,6 +16,14 @@ describe("parseHookInput", () => {
     expect(parsed?.event.kind).toBe("new-user-prompt")
   })
 
+  // The config root is the payload's cwd verbatim — not the repo root, not
+  // the process's cwd. See docs/known-issues.md #4 and README's gate.json
+  // placement paragraph, which this pins.
+  test.each([...HOOK_EVENTS])("%s carries the payload cwd through as root, verbatim", (event) => {
+    const raw = payload({ cwd: "/home/dev/repo/packages/web", tool_name: "Edit" })
+    expect(parseHookInput(raw, event)?.root).toBe("/home/dev/repo/packages/web")
+  })
+
   test.each(EDIT_TOOLS)("maps PostToolUse on %s to file-edited", (tool) => {
     const parsed = parseHookInput(payload({ tool_name: tool }), "PostToolUse")
     expect(parsed?.event.kind).toBe("file-edited")

@@ -38,7 +38,7 @@ export interface GateConfig {
   check: string
   /** Maximum blocks per cycle. `rounds + 1` failing checks ends the cycle. */
   rounds: number
-  /** Sensor path, relative to the repo root. */
+  /** Sensor path, relative to the host-supplied root (for Claude Code, the hook payload's cwd). */
   sensor: string
   /** Hard cap on a single check run. */
   checkTimeoutMs: number

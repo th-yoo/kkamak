@@ -9,11 +9,11 @@ import { NdjsonSensorSink } from "./ndjson-sink.ts"
 import { StderrLogger, SystemClock, systemHostname } from "./system.ts"
 import type { GateHost } from "../kernel/ports.ts"
 
-/** Per-session state lives here, relative to the repo root. */
+/** Per-session state lives here, relative to the host-supplied root (for Claude Code, the hook payload's cwd). */
 export const STATE_DIR = path.join(".km", "gate")
 
 export interface NodeHostOptions {
-  /** Repo root: gate.json, the sensor file and the state directory hang off it. */
+  /** Host-supplied root — for Claude Code, the hook payload's cwd. gate.json, the sensor file and the state directory hang off it. */
   root: string
   /** Harness identity recorded on every sensor line, e.g. "claude-code". */
   app: string

@@ -71,9 +71,22 @@ describe("FileConfigSource", () => {
     expect(new FileConfigSource(dir).read()).toBeUndefined()
   })
 
-  test("reads gate.json from the repo root", () => {
+  test("reads gate.json from the root it was given", () => {
     fs.writeFileSync(path.join(dir, "gate.json"), '{"check":"bun test"}')
     expect(new FileConfigSource(dir).read()).toBe('{"check":"bun test"}')
+  })
+
+  // Known issue 4 (docs/known-issues.md): the README told readers to put
+  // gate.json "at the repo root". The gate reads it from whatever root it
+  // was constructed with — for Claude Code, the hook payload's cwd — and
+  // never resolves upward. Launching from a subdirectory therefore finds no
+  // config and silently no-ops. This pins that, so the corrected README
+  // claim is enforced rather than merely re-worded.
+  test("does not walk upward: a gate.json in the parent is invisible from a subdirectory root", () => {
+    fs.writeFileSync(path.join(dir, "gate.json"), '{"check":"echo parent"}')
+    const sub = path.join(dir, "packages", "web")
+    fs.mkdirSync(sub, { recursive: true })
+    expect(new FileConfigSource(sub).read()).toBeUndefined()
   })
 
   // The escape hatch depends on this: no caching, ever.

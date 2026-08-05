@@ -12,7 +12,7 @@ You are setting up kkamak, a gate that runs a verification check when Claude fin
 
 Read the repo to find a cheap verification command, in this order:
 
-1. `/package.json` at the repo root — read its `scripts` object. Prefer `test`; accept `lint`, `check`, or a similar verification script.
+1. `/package.json` in the current working directory — read its `scripts` object. Prefer `test`; accept `lint`, `check`, or a similar verification script.
 2. A `bun.lock` file or an `@types/bun` dependency (the project uses Bun) — suggest `bun test` when no npm script fits.
 3. Nothing detectable — skip to Step 4.
 
@@ -35,7 +35,7 @@ Show it to the user in a code block. Explain briefly: this runs every time Claud
 
 ## Step 3: Write it (on approval only)
 
-1. Write `gate.json` at the repo root.
+1. Write `gate.json` in the current working directory — the directory Claude Code was launched from, which is where the gate reads it from.
 2. Offer: "Add `.km/` to your `.gitignore`? That is kkamak's runtime state and sensor log. (y/n)"
 3. On yes, add `.km/` unless an exact line already says so.
 4. Confirm: "gate.json written. The gate is active on your next turn."
