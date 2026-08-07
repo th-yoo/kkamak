@@ -135,6 +135,50 @@ only, not a control arm, and no before/after claim rides on it.
 **Not committed anywhere durable.** `.km/` is gitignored, so this stream is
 host-local to yoo-dev and does not travel. The numbers above are the record.
 
+### Update, same day — full-run close, and the finding that matters
+
+The subject repo went on to complete an 8-task rebuild (10 commits) with the
+gate armed throughout. Final stream: `totalLines 11, gateCycles 9, accepted 9,
+blocked 0, exhausted 0, checkMs 6256 → ~14000`.
+
+**The gate accepted 9 of 9 cycles. GitHub Actions CI was failing on three of
+the commits it accepted.**
+
+Those two sentences are the entry. Root cause of the CI failures: two
+re-enabled test blocks redirected `ANTHROPIC_BASE_URL` to a local stub but
+never overrode the *credential*, so `resolveAuth` fell through to the dev
+host's real `~/.claude/.credentials.json`. The tests passed locally because
+the host had credentials, and failed on the first credential-less runner.
+Nothing leaked — the base URL was redirected throughout, so no real token
+ever left the machine and no request reached the real API — but the tests
+were green for a reason unrelated to what they assert.
+
+**Why the gate could not have caught it, structurally.** The gate runs
+`bun test` on the host being worked on. That host has credentials. A check
+command cannot observe a dependence on its own environment; it *is* the
+environment. This is not a defect to fix in the gate — it is a limit on what
+a green gate is evidence *of*. Recorded as such.
+
+The repo's fix generalizes and is worth stealing: an explicit
+`env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN HOME=/tmp/no-creds bun test`
+step, run as its own CI step rather than folded into the normal one — because
+the normal step being credential-less today is *incidental*, and would stop
+being true the day a key is wired in for something unrelated.
+
+**A fourth instance, in the supervising session rather than the subject.**
+This session verified each task independently — commits, diffs, test counts,
+budget arithmetic, doc staleness — and reported three consecutive tasks as
+"verified" while CI was red on all three. The verification was real but ran
+entirely on the same host as the gate, so it shared the gate's blind spot
+exactly. Adding more checks that share an environment adds no coverage. The
+maintainer had to report the CI failure; no instrument here surfaced it.
+
+**Standing lesson for reading this log:** a green streak is evidence about
+breakage *in the environment the check ran in*. Four findings this session —
+skipped tests, a shipped duplicate implementation, host-credential
+dependence, and unwatched CI — are all the same shape, and none of them are
+visible in the sensor numbers above.
+
 ## 2026-08-05 — 0.4.1 review-debt paydown (yoo-dev)
 
 Executed the `docs/superpowers/plans/2026-08-05-kkamak-0.4.1-review-debt.md`
