@@ -49,6 +49,75 @@ the day's sensor numbers, and mechanism observations the sensor stream
 cannot see (behavioral shifts, qualitative saves, instrument anomalies).
 This file is proposer evidence — keep entries factual and dated.
 
+## 2026-08-07 — FIRST NON-kkamak SUBJECT REPO: gate armed on `cc-api-daemon` (yoo-dev)
+
+**Read the scope line first.** Every other entry in this file is kkamak
+running on kkamak. This one is not: the subject is `cc-api-daemon`, a
+separate repo (an ACP daemon being rebuilt on the Anthropic API SDK), which
+had the kkamak plugin's hooks firing but no `gate.json` — armed
+(`edited:true`) with no configured check, so nothing enforced. A `gate.json`
+was added this session and the gate began running there.
+
+**Do NOT pool this stream with the kkamak-on-kkamak stream.** Different
+repo, different workload, different test suite, and `gauge` disabled here
+vs enabled there. It is a separate stream that happens to share a host and
+a plugin version. Same rule as the BASELINE block above: descriptive record
+only, not a control arm, and no before/after claim rides on it.
+
+- **Configuration:** `gate.json` = `{check: "bun test", rounds: 2, gauge:
+  false}`. `gauge` is off deliberately — a review-sensor checkpoint is open
+  on this host through 2026-08-13 and a new gauge emitter would perturb the
+  emission rate being measured. Confirmed off in the stream: every cycle
+  line carries `gauge {"present": false, "offReason": "disabled"}`.
+- **Sensor numbers, measured** — `~/z2/cc-api-daemon/.km/gate-outcomes.ndjson`,
+  read directly, whole file (the stream begins this session):
+  `totalLines 4, gateCycles 2, clean 2, catch 0, exhausted 0, interrupted 0,
+  skippedStop 1, nonCycleLines 1 (promptCheck, spawnTs 1786065473715),
+  checkMs [6256, 11753], reinject v0 ×2, pluginVersion ["0.4.0"],
+  sessions 1 (ea0cfa23), host yoo-dev, app claude-code`.
+  `gateCycles + skippedStop + nonCycleLines` = `2 + 1 + 1` = `4` =
+  `totalLines`, checked.
+- **`checkMs` nearly doubled within the session — workload, not instrument.**
+  6256 ms → 11753 ms across two cycles. Cause is known and mechanical: the
+  session ported 1878 lines of source plus their test files into the repo
+  between the two cycles, taking the suite from 54 to 177 tests. Recorded
+  explicitly so a later reader does not mistake it for the instrument
+  regression the BASELINE block warns about — nothing about the plugin
+  changed, the thing being checked got bigger.
+
+**Mechanism observations the stream cannot see:**
+
+- **The gate changed the plan, before it ever blocked anything.** The
+  implementation plan being executed had Task 1 create a file that Task 2
+  imported, so Task 1 would have ended on a broken import and a red suite.
+  Ungated that is a wobble; under a gate it is a task that cannot commit its
+  own work. The task boundary was redrawn (contract file pulled forward into
+  Task 1) *because* the gate existed. The defect was invisible while the repo
+  was ungated and surfaced within minutes of arming.
+- **Gate-avoidance pressure, observed live.** The first gated commit landed
+  green partly by skipping 10 tests across 3 sites. Two were legitimately
+  blocked on code that did not exist yet; the third was a wire-level
+  cancel-race test skipped on backend-semantics grounds. Every site carried
+  an inline re-enable note — good discipline — but nothing enforced the
+  re-enablement, so a later plan step now requires all skips removed and
+  `grep -rn "\.skip\|skipIf" test/` to return nothing. Worth naming plainly:
+  a green gate makes skipping the cheapest path, and a skipped test under a
+  green gate is indistinguishable from a passing one.
+- **Instrument observability finding (maintainer-facing).** The per-session
+  cycle record `.km/cc-gate/<sessionID>.json` sat at
+  `{edited:true, gating:false, round:0, outcomes:[]}` across the whole
+  session, and that was misread here as "the gate has never run a round."
+  It is in fact the healthy steady state: an accepted round resets to
+  `INITIAL_STATE` and the session's next edit re-sets `edited`. A gate that
+  is passing every cycle and a gate that is never firing therefore present
+  an identical cycle record, and the only way to tell them apart is to read
+  `gate-outcomes.ndjson`. Not a bug — the record is cycle state, not
+  history — but the failure mode is easy to hit and cost a wrong conclusion
+  before the sensor file settled it.
+
+**Not committed anywhere durable.** `.km/` is gitignored, so this stream is
+host-local to yoo-dev and does not travel. The numbers above are the record.
+
 ## 2026-08-05 — 0.4.1 review-debt paydown (yoo-dev)
 
 Executed the `docs/superpowers/plans/2026-08-05-kkamak-0.4.1-review-debt.md`
