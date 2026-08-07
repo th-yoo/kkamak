@@ -132,6 +132,43 @@ only, not a control arm, and no before/after claim rides on it.
   history — but the failure mode is easy to hit and cost a wrong conclusion
   before the sensor file settled it.
 
+  **CORRECTION, same day, later.** The last sentence of that bullet is
+  **wrong**, and it is left standing above rather than edited away because
+  the error is the finding. `gate-outcomes.ndjson` does **not** distinguish
+  them: it appends only when a cycle **COMPLETES**, so an open cycle writes
+  nothing and a *failing* cycle writes nothing. A frozen stream is therefore
+  consistent with idle, blocking, **and** dead.
+
+  Measured directly, hours later on the same subject repo. The stream sat
+  unchanged for 105 minutes (11 lines, mtime 12:49:01) while the session
+  committed normally, which was read here as "the gate stopped enforcing" —
+  and that call was published in this log's earlier draft before it was
+  checked. Forcing a Stop (one trivial edit, end the turn immediately)
+  produced, within seconds: `{gating: true, round: 2, outcomes:
+  ["verify-failed","verify-failed"], checkMs: [10678, 10515]}`. The gate had
+  been working the whole time; the silence was that Stop fires only at turn
+  end and the session had been running 18-minute turns.
+
+  So the same missing distinction produced **two opposite wrong calls in one
+  session** — a dead gate read as healthy, then a healthy gate read as dead.
+  That symmetry is the durable lesson, not either individual error.
+
+  **The instrument is not defective and needs no change.** The cycle record
+  *does* separate all three states — but only while a cycle is open, which
+  is ~10 s and only at turn end, so any sampled read lands on the idle shape
+  with near-certainty. The stream shows only completions. Neither surface
+  can be *sampled*; they go quiet together, and their agreement looks like
+  confirmation while being two instruments blind in the same window. The
+  correct method is to force a transition, not to poll. Recorded as an
+  operator rule rather than a defect — an instrument edit motivated by an
+  observer error would have been the worse outcome.
+
+  One consequence worth stating separately: forcing a Stop mid-refactor
+  gates a tree that was never meant to be gated. The `verify-failed` rounds
+  above were a half-migrated tree (`socketPath` deleted, its importers not
+  yet re-pointed) caught by a Stop the diagnostic itself created. That
+  failure was the observer's artifact, not the subject's regression.
+
 **Not committed anywhere durable.** `.km/` is gitignored, so this stream is
 host-local to yoo-dev and does not travel. The numbers above are the record.
 
