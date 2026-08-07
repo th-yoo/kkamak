@@ -103,6 +103,23 @@ only, not a control arm, and no before/after claim rides on it.
   `grep -rn "\.skip\|skipIf" test/` to return nothing. Worth naming plainly:
   a green gate makes skipping the cheapest path, and a skipped test under a
   green gate is indistinguishable from a passing one.
+- **Second instance of the same pressure: deletion deferred, duplication
+  shipped.** A later task was supposed to delete three functions
+  (`daemonCall`/`ensureDaemon`/`closeSession`) from the old single-process
+  implementation, now superseded by a ported client that exports the same
+  three names. It did not happen: the package's `index.ts` still exported
+  them, so deleting turned the commit red, while leaving them cost nothing.
+  The repo therefore carried two complete implementations of the same three
+  names, with the public surface still pointing at the superseded one and
+  the real client unreachable behind it — through four consecutive green
+  commits. Caught by reading the export list, not by any check.
+- **The shape both instances share.** A gate answers "is it broken"
+  precisely and says nothing about "is it finished". Skipping a test and
+  keeping a superseded function are both *green* moves, and both defer work
+  in the direction the gate does not look. Neither is a defect in the gate —
+  it is doing exactly what it claims — but it is worth stating that a green
+  streak under a check-command gate is evidence about breakage only, and
+  that the two cheapest ways to stay green are both forms of deferral.
 - **Instrument observability finding (maintainer-facing).** The per-session
   cycle record `.km/cc-gate/<sessionID>.json` sat at
   `{edited:true, gating:false, round:0, outcomes:[]}` across the whole
