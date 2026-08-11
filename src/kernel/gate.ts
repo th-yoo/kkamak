@@ -77,7 +77,7 @@ function onFileEdited(
   config: GateConfig | undefined,
 ): GateDecision {
   if (!config || state.edited) return ALLOW
-  persist(host, sessionID, { ...state, edited: true })
+  persist(host, sessionID, { ...state, edited: true }, state.updatedAt)
   return ALLOW
 }
 
@@ -129,7 +129,7 @@ function onNewUserPrompt(
     })
   }
 
-  persist(host, sessionID, { ...INITIAL_STATE })
+  persist(host, sessionID, { ...INITIAL_STATE }, state.updatedAt)
   return ALLOW
 }
 
@@ -146,7 +146,9 @@ async function onStopRequested(
     // The config vanished or broke mid-cycle. Abandon the cycle but keep
     // `edited` — the user's edit is unrelated to the config's disappearance, so
     // restoring gate.json should re-gate without needing a fresh edit.
-    if (state.gating) persist(host, sessionID, { ...INITIAL_STATE, edited: state.edited })
+    if (state.gating) {
+      persist(host, sessionID, { ...INITIAL_STATE, edited: state.edited }, state.updatedAt)
+    }
     return ALLOW
   }
 
@@ -183,23 +185,28 @@ async function onStopRequested(
       durationMs: elapsed(host, startedAt),
       marker: config.marker,
     })
-    persist(host, sessionID, { ...INITIAL_STATE })
+    persist(host, sessionID, { ...INITIAL_STATE }, state.updatedAt)
     return config.marker ? { kind: "allow", marker: HYGIENE_MARKER } : ALLOW
   }
 
   // rounds is a budget of blocks: `rounds + 1` failing checks ends the cycle.
   if (state.round < config.rounds) {
     const round = state.round + 1
-    const recorded = persist(host, sessionID, {
-      ...state,
-      gating: true,
-      round,
-      outcomes,
-      checkMs,
-      cycleStartedAt: startedAt,
-      // A real verdict, pass or fail, proves the runner works.
-      errorStreak: 0,
-    })
+    const recorded = persist(
+      host,
+      sessionID,
+      {
+        ...state,
+        gating: true,
+        round,
+        outcomes,
+        checkMs,
+        cycleStartedAt: startedAt,
+        // A real verdict, pass or fail, proves the runner works.
+        errorStreak: 0,
+      },
+      state.updatedAt,
+    )
 
     // A block we cannot record is a block we cannot bound: the round would
     // never advance on disk, so every later stop would recompute this same
@@ -230,7 +237,7 @@ async function onStopRequested(
     // see GateConfig.marker's doc comment.
     marker: false,
   })
-  persist(host, sessionID, { ...INITIAL_STATE })
+  persist(host, sessionID, { ...INITIAL_STATE }, state.updatedAt)
   return {
     kind: "allow",
     notice:
@@ -255,7 +262,7 @@ function onInternalError(
   const errorStreak = state.errorStreak + 1
 
   if (errorStreak >= ERROR_STREAK_LIMIT) {
-    persist(host, sessionID, { ...INITIAL_STATE, errorStreak, disarmed: true })
+    persist(host, sessionID, { ...INITIAL_STATE, errorStreak, disarmed: true }, state.updatedAt)
     return {
       kind: "allow",
       notice:
@@ -264,7 +271,7 @@ function onInternalError(
     }
   }
 
-  return withPersist(host, sessionID, { ...state, errorStreak }, ALLOW)
+  return withPersist(host, sessionID, { ...state, errorStreak }, state.updatedAt, ALLOW)
 }
 
 // ── Effect helpers: each contains its own failure ────────────────────────────
@@ -280,13 +287,23 @@ function elapsed(host: GateHost, startedAt: number): number {
 }
 
 /**
- * Returns false when the state could not be written. Callers that issued a
+ * Returns false when the state could not be written — either an outright
+ * store failure, or a lost optimistic-concurrency race (`expectedUpdatedAt`
+ * is the `updatedAt` of the `state` this handler loaded at the top of
+ * `handleEvent`; see `StateStore.save`'s doc comment). Callers that issued a
  * decision already do not care; the block branch does, because a block it
- * cannot record is a block it cannot bound.
+ * cannot record is a block it cannot bound — and either failure reason
+ * downgrades it the same way, deliberately: a session that lost a
+ * compare-and-swap race must fail open exactly like one that hit ENOSPC.
  */
-function persist(host: GateHost, sessionID: string, state: GateState): boolean {
+function persist(
+  host: GateHost,
+  sessionID: string,
+  state: GateState,
+  expectedUpdatedAt: number,
+): boolean {
   try {
-    host.state.save(sessionID, state)
+    host.state.save(sessionID, state, expectedUpdatedAt)
     return true
   } catch (err) {
     note(host, `could not persist state for ${sessionID}: ${describe(err)}`)
@@ -298,9 +315,10 @@ function withPersist(
   host: GateHost,
   sessionID: string,
   state: GateState,
+  expectedUpdatedAt: number,
   decision: GateDecision,
 ): GateDecision {
-  persist(host, sessionID, state)
+  persist(host, sessionID, state, expectedUpdatedAt)
   return decision
 }
 

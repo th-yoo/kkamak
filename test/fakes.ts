@@ -39,17 +39,35 @@ export class FakeConfig {
   }
 }
 
+/**
+ * Mirrors FileStateStore's optimistic-concurrency contract (StateStore.save's
+ * doc comment) so gate.ts's compare-and-swap threading is exercised by the
+ * fast kernel test suite too, not only by the filesystem-backed one. Versions
+ * are a plain counter rather than Date.now(): deterministic, and immune to
+ * two saves landing in the same real millisecond during a fast test run.
+ */
 export class FakeStore {
   readonly saves: { sessionID: string; state: GateState }[] = []
   private records = new Map<string, GateState>()
+  private version = 0
 
   load(sessionID: string): GateState {
     return { ...(this.records.get(sessionID) ?? INITIAL_STATE) }
   }
 
-  save(sessionID: string, state: GateState): void {
-    this.records.set(sessionID, { ...state })
-    this.saves.push({ sessionID, state: { ...state } })
+  save(sessionID: string, state: GateState, expectedUpdatedAt: number): void {
+    const current = this.records.get(sessionID) ?? INITIAL_STATE
+    if (current.updatedAt !== expectedUpdatedAt) {
+      throw new Error(
+        `stale write refused for session ${sessionID}: expected updatedAt ` +
+          `${expectedUpdatedAt}, found ${current.updatedAt} on disk — a newer write landed first`,
+      )
+    }
+
+    this.version += 1
+    const stamped: GateState = { ...state, updatedAt: this.version }
+    this.records.set(sessionID, stamped)
+    this.saves.push({ sessionID, state: { ...stamped } })
   }
 
   /** Test-only peek that does not go through load()'s copying. */

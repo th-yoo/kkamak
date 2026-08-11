@@ -115,7 +115,7 @@ Resolved: `test/runtime.test.ts`'s logger test now spies on
 `process.stderr.write` and asserts the delivered message, so no bare
 `hello` reaches the run's output.
 
-## 8. `FileStateStore.save()` is a blind overwrite — concurrent handlers can race and lose an update
+## 8. `FileStateStore.save()` is a blind overwrite — concurrent handlers can race and lose an update — PARTIALLY FIXED
 
 Flagged by an independent architect review, 2026-08-11. `FileStateStore.save()`
 (`src/runtime/file-state-store.ts:36-53`) writes via temp-file-plus-rename, so
@@ -155,6 +155,34 @@ sensor stream, not availability. The fix is optimistic concurrency (re-read
 and compare `updatedAt` before the rename) or an OS advisory lock in
 `FileStateStore`, plus tests that exercise the actual cross-process/cross-callback
 race — too large to land unplanned on release day.
+
+**Partially resolved.** `FileStateStore.save()` now does a compare-and-swap:
+it re-reads the on-disk record immediately before committing and throws
+rather than overwrite when its `updatedAt` doesn't match the
+`expectedUpdatedAt` the caller's `state` was loaded with. That version is
+threaded from `load()` through every `gate.ts` handler via the `state`
+parameter each already holds — the `StateStore.save()` port signature changed
+to `save(sessionID, state, expectedUpdatedAt)` accordingly, both
+implementations and every call site updated. A stale write now throws,
+`persist()`'s existing catch turns that into `false`, and the block branch's
+existing "cannot record → downgrade to allow" path handles it exactly like
+any other save failure — fail-open holds.
+
+This closes the failure case described above: the load-then-slow-check
+window, where process A sits on a stale `load()` for up to `checkTimeoutMs`
+while a faster writer B commits first. **It does not close the
+read-to-rename window**: `save()`'s own compare read and its later
+`fs.renameSync` are two separate syscalls with nothing holding a lock between
+them, so a second OS process could still land a write in that narrow gap and
+still win a race against this store's own compare-and-swap. That is the
+OS-advisory-lock half of the fix named in the original judgement above, and
+it is still not implemented — this remains the honest boundary of what a
+single-process optimistic check can guarantee. Regression tests
+(`test/runtime.test.ts`, `test/gate.test.ts`) cover the stale-write refusal,
+both awkward cases named in the original finding (racing to create a
+session's first record, racing to delete one a concurrent writer just
+advanced), and that losing the race still fails open end-to-end through the
+kernel.
 
 ## Regression: `gate.json`'s `gauge` field was wrongly removed, then restored
 

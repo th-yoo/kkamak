@@ -120,7 +120,7 @@ describe("FileStateStore", () => {
   test("round-trips a saved state", () => {
     const s = store()
     const saved: GateState = { ...INITIAL_STATE, edited: true, gating: true, round: 2, outcomes: ["verify-failed", "verify-failed"] }
-    s.save("sess-1", saved)
+    s.save("sess-1", saved, 0)
     expect(s.load("sess-1")).toMatchObject({
       edited: true,
       gating: true,
@@ -131,13 +131,13 @@ describe("FileStateStore", () => {
 
   test("stamps updatedAt on save", () => {
     const s = store()
-    s.save("sess-1", { ...INITIAL_STATE, edited: true })
+    s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
     expect(s.load("sess-1").updatedAt).toBeGreaterThan(0)
   })
 
   test("keeps sessions apart", () => {
     const s = store()
-    s.save("a", { ...INITIAL_STATE, edited: true })
+    s.save("a", { ...INITIAL_STATE, edited: true }, 0)
     expect(s.load("b")).toEqual(INITIAL_STATE)
   })
 
@@ -149,7 +149,7 @@ describe("FileStateStore", () => {
     ["an empty file", ""],
   ])("reads initial state when the record is %s", (_label, contents) => {
     const s = store()
-    s.save("sess-1", { ...INITIAL_STATE, edited: true })
+    s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
     const file = fs.readdirSync(path.join(dir, ".km", "gate")).find((f) => f.endsWith(".json"))!
     fs.writeFileSync(path.join(dir, ".km", "gate", file), contents)
     expect(s.load("sess-1")).toEqual(INITIAL_STATE)
@@ -158,28 +158,29 @@ describe("FileStateStore", () => {
   // Absent means initial, so saving initial state should not litter the dir.
   test("deletes the record when state returns to initial", () => {
     const s = store()
-    s.save("sess-1", { ...INITIAL_STATE, edited: true })
+    s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
     expect(fs.readdirSync(path.join(dir, ".km", "gate"))).not.toBeEmpty()
-    s.save("sess-1", { ...INITIAL_STATE })
+    const armed = s.load("sess-1")
+    s.save("sess-1", { ...INITIAL_STATE }, armed.updatedAt)
     expect(fs.readdirSync(path.join(dir, ".km", "gate")).filter((f) => f.endsWith(".json"))).toBeEmpty()
   })
 
   test("persists a disarmed session, which is not initial-equivalent", () => {
     const s = store()
-    s.save("sess-1", { ...INITIAL_STATE, disarmed: true, errorStreak: 3 })
+    s.save("sess-1", { ...INITIAL_STATE, disarmed: true, errorStreak: 3 }, 0)
     expect(s.load("sess-1").disarmed).toBe(true)
   })
 
   test("leaves no temp files behind after a save", () => {
     const s = store()
-    s.save("sess-1", { ...INITIAL_STATE, edited: true })
+    s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
     expect(fs.readdirSync(path.join(dir, ".km", "gate")).filter((f) => f.endsWith(".tmp"))).toBeEmpty()
   })
 
   // A harness-supplied session id is untrusted input.
   test("cannot be talked into escaping its directory", () => {
     const s = store()
-    s.save("../../escaped", { ...INITIAL_STATE, edited: true })
+    s.save("../../escaped", { ...INITIAL_STATE, edited: true }, 0)
     expect(fs.existsSync(path.join(dir, "escaped.json"))).toBe(false)
     expect(s.load("../../escaped").edited).toBe(true)
     const entries = fs.readdirSync(path.join(dir, ".km", "gate"))
@@ -189,16 +190,88 @@ describe("FileStateStore", () => {
 
   test("does not confuse two ids that sanitise alike", () => {
     const s = store()
-    s.save("a/b", { ...INITIAL_STATE, edited: true, round: 1 })
-    s.save("a:b", { ...INITIAL_STATE, edited: true, round: 2 })
+    s.save("a/b", { ...INITIAL_STATE, edited: true, round: 1 }, 0)
+    s.save("a:b", { ...INITIAL_STATE, edited: true, round: 2 }, 0)
     expect(s.load("a/b").round).toBe(1)
     expect(s.load("a:b").round).toBe(2)
   })
 
   test("round times survive a save/load round trip", () => {
     const store = new FileStateStore(dir)
-    store.save("s", { ...INITIAL_STATE, edited: true, gating: true, round: 1, outcomes: ["verify-failed"], checkMs: [1_234] })
+    store.save("s", { ...INITIAL_STATE, edited: true, gating: true, round: 1, outcomes: ["verify-failed"], checkMs: [1_234] }, 0)
     expect(store.load("s").checkMs).toEqual([1_234])
+  })
+
+  describe("optimistic concurrency (docs/known-issues.md #8)", () => {
+    test("refuses a stale write and the newer write survives — the race this fixes", () => {
+      const s = store()
+      s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
+      // "Writer A" loads here and is about to sit on a long check.
+      const loadedByA = s.load("sess-1")
+
+      // "Writer B" — a second process, or opencode's second concurrent
+      // callback — loads the same record and, unlike A, saves quickly.
+      const loadedByB = s.load("sess-1")
+      s.save(
+        "sess-1",
+        { ...loadedByB, gating: true, round: 1, outcomes: ["verify-failed"] },
+        loadedByB.updatedAt,
+      )
+      const afterB = s.load("sess-1")
+
+      // A's check finally finishes. Its save is computed from `loadedByA`,
+      // now stale — it must be refused, not silently clobber B's write.
+      expect(() => s.save("sess-1", { ...loadedByA, disarmed: true }, loadedByA.updatedAt)).toThrow()
+
+      // B's state is exactly what's still on disk.
+      expect(s.load("sess-1")).toEqual(afterB)
+      expect(s.load("sess-1").disarmed).toBe(false)
+    })
+
+    test("a save whose expected version matches the current record succeeds", () => {
+      const s = store()
+      s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
+      const loaded = s.load("sess-1")
+      s.save("sess-1", { ...loaded, gating: true, round: 1 }, loaded.updatedAt)
+      expect(s.load("sess-1")).toMatchObject({ gating: true, round: 1 })
+    })
+
+    // Awkward case 1: the record is absent entirely. `0` is the sentinel for
+    // "nothing was here at load time" — two writers racing to create the
+    // same session's first record must not both succeed.
+    test("refuses to arm a session a concurrent writer already created", () => {
+      const s = store()
+      s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
+      expect(() => s.save("sess-1", { ...INITIAL_STATE, edited: true, round: 9 }, 0)).toThrow()
+      expect(s.load("sess-1").round).toBe(0)
+    })
+
+    // Awkward case 2: the state being saved is itself initial-equivalent, so
+    // save() deletes rather than writes. A stale reset must not delete a
+    // concurrent writer's real progress out from under it.
+    test("refuses to delete when a newer, non-initial record landed first", () => {
+      const s = store()
+      s.save("sess-1", { ...INITIAL_STATE, edited: true, gating: true, round: 1, outcomes: ["verify-failed"] }, 0)
+      const loaded = s.load("sess-1")
+
+      // A concurrent writer advances the cycle further.
+      s.save("sess-1", { ...loaded, round: 2, outcomes: ["verify-failed", "verify-failed"] }, loaded.updatedAt)
+
+      // A stale accept-branch reset, computed from the pre-advance read,
+      // must not wipe it.
+      expect(() => s.save("sess-1", { ...INITIAL_STATE }, loaded.updatedAt)).toThrow()
+      expect(s.load("sess-1")).toMatchObject({ round: 2, outcomes: ["verify-failed", "verify-failed"] })
+      expect(fs.readdirSync(path.join(dir, ".km", "gate")).filter((f) => f.endsWith(".json"))).not.toBeEmpty()
+    })
+
+    test("two consecutive saves in the same store never stamp an identical updatedAt", () => {
+      const s = store()
+      s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
+      const v1 = s.load("sess-1").updatedAt
+      s.save("sess-1", { ...INITIAL_STATE, edited: true, round: 1 }, v1)
+      const v2 = s.load("sess-1").updatedAt
+      expect(v2).toBeGreaterThan(v1)
+    })
   })
 
   // A session in flight across an upgrade must not lose its armed state.
@@ -287,7 +360,7 @@ describe("createNodeHost", () => {
 
   test("stores state under .km/gate inside the given root", () => {
     const host = createNodeHost({ root: dir, app: "x" })
-    host.state.save("sess-1", { ...INITIAL_STATE, edited: true })
+    host.state.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
     expect(fs.existsSync(path.join(dir, ".km", "gate"))).toBe(true)
   })
 

@@ -450,14 +450,38 @@ describe("fail-open: no port failure may wedge a session", () => {
     const realSave = h.store.save.bind(h.store)
     h.host.state = {
       load: (id) => h.store.load(id),
-      save: (id, s) => {
-        realSave(id, s)
+      save: (id, s, expected) => {
+        realSave(id, s, expected)
         throw new Error("ENOSPC")
       },
     }
     const gate = createGate(h.host)
     await gate.handle(edit)
     expect(await gate.handle(stop)).toMatchObject({ kind: "allow" })
+  })
+
+  // docs/known-issues.md #8: a check can run for minutes, and nothing held
+  // the state file locked while it did. `onRun` fires mid-`host.check.run`,
+  // exactly where a second writer — another process, or opencode's second
+  // concurrent callback — would land a real write between this handler's own
+  // `load()` and its later `persist()`. The stale writer must lose the race,
+  // and losing it must still fail open rather than wedge the turn.
+  test("a concurrent writer during a slow check wins the race, and the stale write still fails open", async () => {
+    const h = makeHarness({ raw: '{"check":"bun test","rounds":2}', script: [FAIL] })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+
+    h.check.onRun = () => {
+      const loaded = h.store.load(SESSION)
+      h.store.save(SESSION, { ...loaded, disarmed: true }, loaded.updatedAt)
+    }
+
+    const decision = await gate.handle(stop)
+    expect(decision.kind).toBe("allow")
+    // The concurrent writer's state survived; this handler's own,
+    // now-stale block was refused rather than clobbering it.
+    expect(h.store.peek(SESSION)?.disarmed).toBe(true)
+    expect(h.store.peek(SESSION)?.gating).toBe(false)
   })
 
   test("a throwing sensor sink does not change the decision", async () => {
@@ -548,7 +572,7 @@ describe("a block that cannot be recorded is not a block", () => {
   /** Arms the session durably, then makes every subsequent save fail. */
   function armedThenReadOnly() {
     const h = makeHarness({ fallback: FAIL })
-    h.store.save(SESSION, { ...INITIAL_STATE, edited: true })
+    h.store.save(SESSION, { ...INITIAL_STATE, edited: true }, 0)
     h.host.state = {
       load: (id) => h.store.load(id),
       save: () => {
