@@ -274,6 +274,77 @@ describe("FileStateStore", () => {
     })
   })
 
+  // The advisory lockfile closes the gap the compare-and-swap check alone
+  // cannot: the window between save()'s own re-read and its rename, where a
+  // second concurrent save() could otherwise still land a write. Acquire
+  // timeout and staleness threshold are overridden to small numbers here so
+  // these tests run fast without changing the logic under test.
+  describe("advisory lock (docs/known-issues.md #8)", () => {
+    const lockPathFor = (sessionID: string) =>
+      path.join(dir, ".km", "gate", `${recordName(sessionID)}.json.lock`)
+
+    test("leaves no lockfile behind after a save", () => {
+      const s = store()
+      s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
+      expect(fs.readdirSync(path.join(dir, ".km", "gate")).filter((f) => f.endsWith(".lock"))).toBeEmpty()
+    })
+
+    test("a live lock from another process makes save() degrade to unlocked rather than throw or hang", () => {
+      const s = new FileStateStore(path.join(dir, ".km", "gate"), 30, 2_000)
+      s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
+      const loaded = s.load("sess-1")
+
+      // Simulate another process actively holding the lock: fresh mtime, so
+      // it must not be reclaimed as stale.
+      const lockPath = lockPathFor("sess-1")
+      fs.writeFileSync(lockPath, "")
+
+      const started = Date.now()
+      expect(() => s.save("sess-1", { ...loaded, round: 1 }, loaded.updatedAt)).not.toThrow()
+      // Bounded by the 30ms acquire timeout above, not a hang.
+      expect(Date.now() - started).toBeLessThan(1_000)
+
+      // The save still landed — degraded to the CAS-only path, not refused.
+      expect(s.load("sess-1").round).toBe(1)
+      // The lock this store never acquired is untouched — it does not
+      // release a lock it does not own.
+      expect(fs.existsSync(lockPath)).toBe(true)
+    })
+
+    test("a stale lock from a killed process is reclaimed rather than blocking forever", () => {
+      const s = new FileStateStore(path.join(dir, ".km", "gate"), 500, 20)
+      s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
+      const loaded = s.load("sess-1")
+
+      const lockPath = lockPathFor("sess-1")
+      fs.writeFileSync(lockPath, "")
+      const old = new Date(Date.now() - 1_000)
+      fs.utimesSync(lockPath, old, old) // older than the 20ms staleness threshold above
+
+      s.save("sess-1", { ...loaded, round: 1 }, loaded.updatedAt)
+      expect(s.load("sess-1").round).toBe(1)
+      // Reclaimed, then released again after this store's own use — no
+      // leftover, unlike the live-lock case above.
+      expect(fs.existsSync(lockPath)).toBe(false)
+    })
+
+    test("a filesystem that rejects the lock operation outright still saves, unlocked", () => {
+      const s = store()
+      s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
+      const loaded = s.load("sess-1")
+
+      const openSync = spyOn(fs, "openSync").mockImplementation(() => {
+        throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" })
+      })
+      try {
+        expect(() => s.save("sess-1", { ...loaded, round: 1 }, loaded.updatedAt)).not.toThrow()
+      } finally {
+        openSync.mockRestore()
+      }
+      expect(s.load("sess-1").round).toBe(1)
+    })
+  })
+
   // A session in flight across an upgrade must not lose its armed state.
   test("a record written before checkMs existed loads as armed with no round times", () => {
     const store = new FileStateStore(dir)

@@ -115,7 +115,7 @@ Resolved: `test/runtime.test.ts`'s logger test now spies on
 `process.stderr.write` and asserts the delivered message, so no bare
 `hello` reaches the run's output.
 
-## 8. `FileStateStore.save()` is a blind overwrite — concurrent handlers can race and lose an update — PARTIALLY FIXED
+## 8. `FileStateStore.save()` is a blind overwrite — concurrent handlers can race and lose an update — RESOLVED
 
 Flagged by an independent architect review, 2026-08-11. `FileStateStore.save()`
 (`src/runtime/file-state-store.ts:36-53`) writes via temp-file-plus-rename, so
@@ -183,6 +183,37 @@ both awkward cases named in the original finding (racing to create a
 session's first record, racing to delete one a concurrent writer just
 advanced), and that losing the race still fails open end-to-end through the
 kernel.
+
+**Fully resolved.** `FileStateStore.save()`'s whole read-modify-write — the
+compare-and-swap read, the accept/delete decision, and the commit itself —
+now also runs under a best-effort advisory lock (`FileStateStore.withLock`),
+closing the read-to-rename window the "Partially resolved" note above named
+as still open. It is a lockfile via atomic `O_CREAT|O_EXCL` create (`"wx"`),
+not a real `flock` syscall — Node's `fs` module exposes none without a
+native addon, and this is the technique effectively every userland Node
+lockfile library falls back to instead. Two concurrent `save()` calls for
+the same session now serialize, so one's compare-and-swap read can no longer
+interleave with the other's rename.
+
+This does not make the lock unconditional, by design. Fail-open is absolute
+(`gate.ts`'s governing rule), so a lock that cannot be acquired within a
+bounded timeout, a lock left behind by a killed process (reclaimed once it
+is older than a generous staleness threshold rather than waited out
+indefinitely), or a filesystem that rejects the lock operation outright
+(`EACCES`, `EROFS`, an unsupported call) all fall through to running the
+read-modify-write **unlocked** — still protected by the compare-and-swap
+check alone, exactly as in the "Partially resolved" state above. A `save()`
+that takes that degraded path is exposed only to the microscopic
+read-to-rename gap this lock exists to close; the much larger
+load-then-slow-check race the compare-and-swap check closes on its own still
+holds unconditionally either way. The lockfile technique also inherits the
+standard caveat any `O_CREAT|O_EXCL`-based lock has on very old NFS versions
+that do not implement it atomically — the same caveat a real `flock` would
+have there too, and not a new limitation this introduces. Regression tests
+(`test/runtime.test.ts`) cover a live lock forcing the degraded path without
+hanging or throwing, a stale lock being reclaimed rather than blocking
+forever, and a filesystem that rejects the lock operation outright still
+completing the save unlocked.
 
 ## Regression: `gate.json`'s `gauge` field was wrongly removed, then restored
 
