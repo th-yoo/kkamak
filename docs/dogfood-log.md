@@ -147,6 +147,85 @@ doc-only workload. Descriptive record, not a control arm; no before/after
 claim rides on it, and it is not poolable with any other entry here — the
 others measure a different implementation.
 
+**Superseded by the update below**, same session, same day: N is 3 cycles,
+not 1, by the time this entry's own writing settled.
+
+### Update, same day — three cycles now, and what two reviews disagree on
+
+Three more sensor cycles happened in this session after the one described
+above, all still `2026-08-11`, all still the public plugin. Whole stream,
+`.km/gate-outcomes.ndjson`, read directly — **3 lines total, 3 cycles, every
+one `rounds ["accepted"]` on the first round, 0 blocks, 0 exhausted, 0
+interrupted, `pluginVersion "0.4.1"` throughout**:
+
+```
+#1  ts 1786445164706  checkMs 3337  durationMs 3337   — install-verification runbook fixes
+#2  ts 1786447808167  checkMs 3337  durationMs 3337   — src/kernel/ports.ts edit
+#3  ts 1786448099161  checkMs 3294  durationMs 3294   — docs/known-issues.md edit
+```
+
+Work produced: `89a455b` (the five runbook corrections above) and `0733b60`
+(the entry above, written this same session) are both merged and pushed to
+`main`. `97ae9b1` (the `ports.ts` doc-comment fix) and `4e6e11b` (the
+`known-issues.md` entry) are still on this branch, unmerged, unpushed.
+
+**Observation 1, the one most worth recording: two independent full-file
+reviews of the same ~20-file kernel returned disjoint findings.** An
+external architect-style review (see Observation 2 for why it had to run
+outside this session) found the `FileStateStore` compare-and-swap gap now
+recorded in `docs/known-issues.md` #8, and missed the `gateExhausted`
+doc-comment imprecision fixed in `97ae9b1`. An in-session general-purpose
+agent found the doc-comment imprecision, and missed the race. Neither
+manufactured a finding to have something to report — both correctly cleared
+several other candidates as deliberate-and-documented rather than flagging
+them. Read together, not separately: a single review pass on this codebase
+is demonstrably incomplete, not because either agent was careless, but
+because the two runs attacked it from different angles and neither one's
+angle covered the other's.
+
+**Observation 2 — isolation strips the plugin ecosystem, concretely.** A
+`code-architect` agent was requested by name for that review and was not
+available in this session: `Agent type 'code-architect' not found. Available
+agents: claude, claude-code-guide, Explore, general-purpose, Plan,
+statusline-setup`. The isolated `CLAUDE_CONFIG_DIR` this measurement regime
+requires (Configuration section above, and `docs/install-verification.md`
+§0) has only `kkamak@kkamak` enabled — the exact property that makes this
+session's sensor line attributable also removes every other plugin,
+including the one that ships that agent type. The review ran through a
+generic agent standing in for the named one instead. A concrete instance of
+the isolation tradeoff, not a hypothetical one.
+
+**Observation 3 — a `checkMs` anomaly, checked and cleared.** Cycles #1 and
+#2 both read `3337`ms, 44 minutes apart (`1786447808167 − 1786445164706 =
+2643461`ms ≈ 44m). Two identical timings that far apart look, on first read,
+like a cached or stuck measurement rather than a live one. Cycle #3 read
+`3294`ms — different — so the timer measures live and there is no instrument
+defect; #1 and #2 landing on the same millisecond is coincidence, not a
+stopped clock. Recorded as checked-and-cleared rather than silently dropped.
+Separately: `durationMs` equals `checkMs` on all three lines above. Not a
+bug — per `gate.ts`'s own comment on `checkMs` (around line 166), for a
+first-round accept `startedAt` (`gate.ts:153`) and `checkStartedAt`
+(`gate.ts:155`) are read one line apart with no work between them, so
+`durationMs` (elapsed since `startedAt`) and `checkMs` (elapsed since
+`checkStartedAt`) measure from effectively the same instant. The two numbers
+only diverge once a cycle spans more than one round or carries agent/human
+wait time around the check.
+
+**Observation 4 — the block-then-accept shape remains unobserved on the
+rewritten kernel.** All three changes across this session's cycles were
+correct on the first try; no `verify-failed` round was produced, and none
+was manufactured in order to produce one. Stated plainly rather than left to
+read as a quiet claim: three single-round accepts say nothing about whether
+the gate blocks correctly, only that nothing here needed it to. The corpus
+note earlier in this entry — 5 real block-then-accept instances, all at
+`0.2.0`, none yet on the rewritten kernel — still stands, unchanged by this
+update.
+
+**The off-by-one this update cannot avoid.** Writing this update is itself
+an edit to a tracked file. It will arm the session, and on the next stop it
+will resolve into a fourth cycle — one this text is written before and so
+cannot report. Left for whoever reads the stream next.
+
 ## 2026-08-07 — FIRST NON-kkamak SUBJECT REPO: gate armed on `cc-api-daemon` (yoo-dev)
 
 **Read the scope line first.** Every other entry in this file is kkamak
