@@ -63,7 +63,15 @@ export interface SensorLine {
   check: string
   /** True whenever the stop was ultimately allowed through. */
   accepted: boolean
-  /** True when the rounds budget ran out rather than the check passing. */
+  /**
+   * True when the rounds budget ran out rather than the check passing.
+   * Also true on an `interrupted` line, even though the budget did not
+   * actually run out — deliberate schema parity with the frozen contract
+   * (`cc-gate-plugin/src/core/prompt.ts`'s `handleUserPromptSubmit`,
+   * whose own comment calls `accepted:true + gateExhausted:true` on
+   * preemption "deliberate schema parity, not a bug"), not an oversight
+   * in this kernel's `onNewUserPrompt`.
+   */
   gateExhausted: boolean
   /**
    * True when a new user prompt preempted an open cycle, OR when it arrived
