@@ -114,8 +114,15 @@ credential into the isolated dir before running this step:
 install -m 600 ~/.claude/.credentials.json "$CLAUDE_CONFIG_DIR/.credentials.json"
 ```
 
-(A symlink works too, and avoids the copy going stale if the real credential
-rotates mid-run.)
+**Do not use a symlink here, and do not expect the copy to stay fresh.**
+A symlink was tried and measured: it survives only until the first token
+refresh, because Claude Code refreshes by unlinking and rewriting rather
+than writing through the link — after which the isolated dir silently holds
+a plain, frozen copy. Observed on a session left running overnight: the
+isolated credential stopped at one refresh while the real one moved on
+seven hours later. Either way the seeded credential goes stale when the
+real one rotates, so re-seed before a run rather than assuming a long-lived
+isolated config still authenticates.
 
 **Also required, and easy to miss: onboarding.** Even with credentials
 resolving, an isolated config with no onboarding record runs the
@@ -137,6 +144,16 @@ CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" claude auth status
 Confirm `loggedIn: true` and a real `authMethod` before proceeding. If this
 fails, fix the seeding above rather than going on to debug a `claude -p` turn
 that was never going to reach the model.
+
+**What this pre-check does NOT prove — measured.** It reports presence, not
+validity: a seeded credential whose `expiresAt` has already passed still
+reports `loggedIn: true` and exits `0`. Verified directly — an isolated
+config holding a credential that expired nine hours earlier passed this
+check, while the real config's credential had refreshed since. So a green
+`auth status` rules out a *missing* or *unseeded* credential, which is what
+it is here for, and rules out nothing about an *expired* one. If the check
+passes and the turn still dies before reaching the model, compare
+`expiresAt` in the seeded file against now, and re-seed.
 
 **macOS limitation, confirmed:** this step cannot complete on macOS under the
 isolated `CLAUDE_CONFIG_DIR` from step 0, even with the seeding above —
