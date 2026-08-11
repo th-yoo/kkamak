@@ -49,6 +49,104 @@ the day's sensor numbers, and mechanism observations the sensor stream
 cannot see (behavioral shifts, qualitative saves, instrument anomalies).
 This file is proposer evidence — keep entries factual and dated.
 
+## 2026-08-11 — FIRST SENSOR LINE PRODUCED BY THE PUBLIC PLUGIN (yoo-dev)
+
+**Read the scope line first.** Every sensor number in every entry below this
+one was produced by the private `cc-gate-plugin` research build, not by
+kkamak. This is the first entry whose numbers come from the released public
+plugin — installed from the marketplace, running as the only gate present.
+Before today, the shipped product had never emitted a sensor line anywhere.
+
+**Why no earlier entry could have carried one.** This repo's own stream
+(`.km/gate-outcomes.ndjson`, 71 lines, read directly) partitions
+`0.2.0` × 10, `0.2.1` × 58, `0.3.0` × 3 — **zero** lines at any `0.4.x`.
+The plugin installed on this host under the name `kkamak` is
+`cc-gate-plugin` (marketplace `kkamak-local`, installed version `0.4.0`),
+so every line in that file reports the research build. The 2026-08-05 entry
+below already says reading those lines as evidence about 0.4.1 would be
+wrong; this entry is what closes that gap rather than restating it.
+
+**Configuration — single-emitter by construction.** The public plugin cannot
+be installed beside `cc-gate-plugin` without both appending to the same
+sensor file (`docs/install-verification.md` step 0 states the hazard; it is
+real — both resolve `root` from the same hook-payload `cwd` and both default
+to `.km/gate-outcomes.ndjson`). So this session ran under an isolated
+`CLAUDE_CONFIG_DIR` (`~/.cache/kkamak-dogfood-config`) with
+`enabledPlugins: {"kkamak@kkamak": true}` and nothing else, against a git
+worktree of this repo (`~/kkamak-selfgate`, branch `dogfood-0.4.1`, off
+`aec746a`) so the 71-line corpus was never touched. Credential seeded by
+symlink; `hasCompletedOnboarding` seeded into the isolated `.claude.json`.
+Session model **Sonnet 5**, auto-accept mode on — both recorded because
+gate-avoidance behaviour is model- and friction-dependent, and neither is
+comparable to any other entry here.
+
+**Sensor numbers, measured** — whole file, one line, the stream begins and
+ends with this session:
+
+```
+totalLines 1, gateCycles 1, accepted 1, blocked 0, exhausted 0,
+interrupted 0, skippedStop 0, rounds ["accepted"], durationMs 3337,
+checkMs [3337], marker false, pluginVersion "0.4.1", host yoo-dev,
+app claude-code, check "bun test"
+```
+
+`checkMs 3337` is the first real check timing for the shipped product.
+
+**Mechanism observations the stream cannot see:**
+
+- **`pluginVersion` is NOT a sufficient key for separating the two
+  implementations — this corrects the rule stated in the 2026-08-05 entry
+  below.** That entry concludes that "only the `pluginVersion` stamp and its
+  `ts` boundary" validly partition build regimes. That holds within one
+  implementation and fails across the two: `cc-gate-plugin` shipped `0.4.0`,
+  `0.4.1` (`e25b150`) and `0.4.2` (`a1fb822`), while the public plugin ships
+  `0.4.0` and `0.4.1`. The version spaces **overlap on both `0.4.0` and
+  `0.4.1`**, so a `0.4.1` line is ambiguous on its face. What makes this
+  entry's line attributable is not the stamp but the isolation: a config in
+  which no other gate is installed. Any future 0.4.x measurement needs the
+  same guarantee, or it is unattributable regardless of what it stamps.
+- **Arming is edit-scoped and resets on accept — confirmed in code, not
+  inferred.** A turn that only ran `git commit` produced no cycle and no
+  sensor line. Three layers explain it: `hooks/hooks.json` registers
+  PostToolUse with matcher `Edit|MultiEdit|Write|NotebookEdit`, so a `Bash`
+  call never spawns the hook; `src/adapters/claude-code/hook-input.ts:13,49`
+  rejects any tool outside `EDIT_TOOLS`; and `src/kernel/gate.ts:143` returns
+  ALLOW when `!state.edited && !state.gating`, running no check and writing
+  no line. The precise property is narrower than "commands aren't gated":
+  `edited` is per-session (`src/kernel/ports.ts:15`), so an edit arms every
+  later turn until a cycle resolves — and a clean accept resets to
+  `INITIAL_STATE` (`gate.ts:52,70`), clearing it. Edit-then-commit in one
+  turn is gated; commit in a fresh turn after an accepted cycle is not.
+  Consequence worth stating: a `push` or deploy issued after an accepted
+  cycle is not covered. Related and deliberate — `gate.ts:149` abandons a
+  cycle if `gate.json` vanishes mid-flight but *keeps* `edited`, so restoring
+  the config re-gates without a fresh edit.
+- **A doc-only session cannot produce a block here, structurally.** The
+  check is `bun test` and no test pins `docs/install-verification.md`
+  (`README.md` is pinned, at `test/packaging.test.ts:81`). `["accepted"]`
+  was therefore the only outcome this workload could produce; it is not
+  evidence that the gate declines to block. The block-then-accept shape has
+  5 real instances in the 71-line corpus, all at `0.2.0` — none yet on the
+  rewritten kernel.
+- **Executing the install-verification runbook found five defects in it.**
+  Fixed this session (`89a455b`). Three would each independently produce a
+  false "the release is broken" reading: the isolated config re-roots
+  credential lookup on Linux too (the runbook claimed otherwise), the
+  isolated `.claude.json` needs `hasCompletedOnboarding` or the onboarding
+  flow runs instead of the check, and headless `claude -p` needs
+  `--permission-mode acceptEdits` or the edit is auto-denied, the gate never
+  arms, and no line is written. The other two: the install command prints no
+  version string (step 2's cache path is the only version proof), and
+  `claude auth status` is a token-free pre-check that catches the first two
+  before a turn is spent. The runbook had never been executed end to end
+  before today; it was executed today against the `0.4.1` tag, which passed,
+  and the GitHub Release for `v0.4.1` was cut on that basis.
+
+**Limits.** N = 1 cycle, one session, one operator, one host, one model,
+doc-only workload. Descriptive record, not a control arm; no before/after
+claim rides on it, and it is not poolable with any other entry here — the
+others measure a different implementation.
+
 ## 2026-08-07 — FIRST NON-kkamak SUBJECT REPO: gate armed on `cc-api-daemon` (yoo-dev)
 
 **Read the scope line first.** Every other entry in this file is kkamak
