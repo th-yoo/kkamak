@@ -115,6 +115,47 @@ Resolved: `test/runtime.test.ts`'s logger test now spies on
 `process.stderr.write` and asserts the delivered message, so no bare
 `hello` reaches the run's output.
 
+## 8. `FileStateStore.save()` is a blind overwrite — concurrent handlers can race and lose an update
+
+Flagged by an independent architect review, 2026-08-11. `FileStateStore.save()`
+(`src/runtime/file-state-store.ts:36-53`) writes via temp-file-plus-rename, so
+each individual write is atomic — but there is no compare-and-swap or version
+check against whatever is already on disk at write time. Every handler in
+`gate.ts` does a non-atomic read-modify-write: `handleEvent` loads state at
+`gate.ts:58`, and in `onStopRequested` an `await host.check.run` sits between
+that load and the eventual persist (`gate.ts:155-169`) — for up to
+`checkTimeoutMs`, 300s by default. No locking exists anywhere in `src/`
+(confirmed by grep).
+
+**Concrete failure case.** `rounds: 2`, state on disk `gating:true, round:1`.
+Process A is mid-check on the retry. A new user prompt arrives and Claude Code
+delivers it in a separate process; process B loads that same pre-A state,
+takes the `gating` branch of `onNewUserPrompt` (`gate.ts:117-133`), writes an
+interrupted sensor line, and persists a full `INITIAL_STATE` reset — the
+documented human-preemption stand-down. Process A then finishes its check and
+persists its own, now-stale snapshot with `round:2`, clobbering the reset. A
+later, unrelated turn now sees `round === config.rounds`, so its first failing
+check goes straight to exhaustion with zero blocks actually issued that cycle
+— and the sensor stream holds two overlapping lines making inconsistent
+claims about the same window. For opencode this needs no second process at
+all: `plugin.ts`'s `chat.message` handler and its `session.idle`-driven stop
+handler (`src/adapters/opencode/plugin.ts:90-125`) are async callbacks in one
+event loop sharing a single `gate` instance, and the `await` inside each
+yields control between them the same way a second process would.
+
+This exact gap was flagged and deliberately deferred in
+`docs/superpowers/plans/2026-07-30-kernel-review-remediation.md`, on the
+stated condition that it be revisited "once the adapters exist and the real
+invocation model is known." That condition is now met — both adapters have
+shipped.
+
+**Judgement: not fixed here.** Fail-open still holds, so no session wedges;
+what degrades is enforcement strength on a later turn and the integrity of the
+sensor stream, not availability. The fix is optimistic concurrency (re-read
+and compare `updatedAt` before the rename) or an OS advisory lock in
+`FileStateStore`, plus tests that exercise the actual cross-process/cross-callback
+race — too large to land unplanned on release day.
+
 ## Regression: `gate.json`'s `gauge` field was wrongly removed, then restored
 
 This repo's own tracked `gate.json` carries `"gauge": true`. The public
