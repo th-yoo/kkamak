@@ -56,9 +56,12 @@ claude plugin install kkamak@kkamak
 
 **What success looks like:** both commands exit without an error message.
 `claude plugin marketplace add` reports the marketplace was added;
-`claude plugin install` reports the plugin was installed at version `0.4.1`.
-If either command instead reports "not found" or a network/auth error, stop
-here — the release is not installable and nothing below will make sense.
+`claude plugin install` prints no version — verified live, its actual output
+is `Successfully installed plugin: kkamak@kkamak (scope: user)`. Don't expect
+a version number here; step 2's cache path is the real proof of which
+version landed. If either command instead reports "not found" or a
+network/auth error, stop here — the release is not installable and nothing
+below will make sense.
 
 ## 2. Cache verification — prove the running copy is the new one
 
@@ -100,18 +103,47 @@ Both must exist.
 This proves the installed copy is actually wired into a Claude Code session
 and produces a real block — not just that files were copied.
 
+**The isolated-config auth problem applies on Linux too — verified live.**
+`CLAUDE_CONFIG_DIR` re-roots credential lookup, not just plugin/marketplace
+state: a fresh, isolated config has no `.credentials.json` of its own, so
+`claude auth status` under it reports `loggedIn: false` / `authMethod: none`,
+and a `claude -p` turn dies before it ever reaches the model. Seed the real
+credential into the isolated dir before running this step:
+
+```bash
+install -m 600 ~/.claude/.credentials.json "$CLAUDE_CONFIG_DIR/.credentials.json"
+```
+
+(A symlink works too, and avoids the copy going stale if the real credential
+rotates mid-run.)
+
+**Also required, and easy to miss: onboarding.** Even with credentials
+resolving, an isolated config with no onboarding record runs the
+onboarding/login flow instead of the `claude -p` prompt. Seed that too:
+
+```bash
+printf '%s' '{"hasCompletedOnboarding":true}' > "$CLAUDE_CONFIG_DIR/.claude.json"
+```
+
+**Pre-check both, before spending a turn.** `claude auth status` is
+token-free — it prints JSON and exits `0` (logged in) or `1` (not) — so it
+catches a missing credential or missing onboarding record before any model
+turn is spent:
+
+```bash
+CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" claude auth status
+```
+
+Confirm `loggedIn: true` and a real `authMethod` before proceeding. If this
+fails, fix the seeding above rather than going on to debug a `claude -p` turn
+that was never going to reach the model.
+
 **macOS limitation, confirmed:** this step cannot complete on macOS under the
-isolated `CLAUDE_CONFIG_DIR` from step 0. Claude Code's oauth credential on
-macOS lives in the Keychain, not in config-dir state, and a fresh, isolated
-config has no path to it — a `claude -p` turn run this way fails before it
-ever reaches the model. On macOS, skip to the **Container variant** below
+isolated `CLAUDE_CONFIG_DIR` from step 0, even with the seeding above —
+macOS has no `.credentials.json` on disk to seed from; the credential lives
+only in the Keychain. On macOS, skip to the **Container variant** below
 instead, which handles this by exporting the Keychain credential explicitly
-into the container. On Linux, where the credential is a real file at
-`~/.claude/.credentials.json`, this step's isolation problem doesn't apply to
-auth the same way — `CLAUDE_CONFIG_DIR` still isolates plugin/marketplace
-state as step 0 describes, but a Linux maintainer should confirm their own
-non-interactive auth path (e.g. `ANTHROPIC_API_KEY`) works under the isolated
-config before relying on this step as written.
+into the container.
 
 ```bash
 mkdir -p /tmp/kkamak-install-check
@@ -122,9 +154,19 @@ echo '{ "check": "exit 1", "rounds": 1 }' > gate.json
 
 Run a Claude Code turn rooted at `/tmp/kkamak-install-check`, under the same
 isolated `CLAUDE_CONFIG_DIR` (`claude -p` is the simplest way to drive one
-turn non-interactively for this check — e.g.
-`CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" claude -p "create scratch.txt with the word hi in it"`
-run from `/tmp/kkamak-install-check`). Because `check` is `exit 1`, it can
+turn non-interactively for this check). **`--permission-mode acceptEdits` is
+required, not optional:** headless `claude -p` has no human to approve tool
+calls, so without it the `Write` is auto-denied, no edit is ever made, the
+gate never arms, and no sensor line gets written — which reads as a broken
+release rather than what it actually is, a missing flag.
+
+```bash
+CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" claude -p \
+  "create scratch.txt with the word hi in it" \
+  --permission-mode acceptEdits
+```
+
+Run from `/tmp/kkamak-install-check`. Because `check` is `exit 1`, it can
 never pass: you should see the turn blocked, with the check's failure output
 handed back to the agent, on the first attempt.
 
