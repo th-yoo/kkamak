@@ -1,7 +1,7 @@
 # Install verification
 
 This is the procedure a maintainer runs, on a real machine, after pushing the
-`0.4.1` tag, to prove the release is actually installable. It is a runbook,
+`0.4.2` tag, to prove the release is actually installable. It is a runbook,
 not a report: nothing in this file has been executed as written. A green
 `bun test` run proves the code is correct; it says nothing about whether
 `claude plugin install` on a clean machine actually produces a working gate.
@@ -71,7 +71,7 @@ marketplace name and plugin name. Verified live against a fresh
 `CLAUDE_CONFIG_DIR`: `.claude-plugin/marketplace.json`'s `name` field is
 `kkamak`, and a real `marketplace add` + `install` against an isolated,
 otherwise-empty config produces exactly
-`$CLAUDE_CONFIG_DIR/plugins/cache/kkamak/kkamak/0.4.1/` — no hedging needed
+`$CLAUDE_CONFIG_DIR/plugins/cache/kkamak/kkamak/0.4.2/` — no hedging needed
 on that path, since isolation (step 0) also means there is no pre-existing
 `kkamak-local` or other dev registration under this same `CLAUDE_CONFIG_DIR`
 to collide with it.
@@ -84,7 +84,7 @@ dir from an earlier run, for instance):
 ls -d "$CLAUDE_CONFIG_DIR/plugins/cache/kkamak/kkamak/"*/
 ```
 
-This must print exactly one path, ending in `/0.4.1/`.
+This must print exactly one path, ending in `/0.4.2/`.
 
 Confirm the files this release adds are present in that one version
 directory (these are new in `0.4.0`; their absence would mean the cache
@@ -206,7 +206,7 @@ list two `"verify-failed"` entries. `"accepted"` will read `true` here too —
 that field means "the stop was ultimately allowed through" (exhaustion always
 ends by allowing the stop), not "the check passed"; no code path ever writes
 `"accepted": false`, so it is not useful as a failure signal on its own.
-`"pluginVersion"` must read `"0.4.1"` — that field is the durable proof that
+`"pluginVersion"` must read `"0.4.2"` — that field is the durable proof that
 the session ran the copy this release installed, not a leftover older one.
 
 ## 4. Cleanup
@@ -361,7 +361,7 @@ podman exec -e PATH="$CPATH" "$NAME" cat /root/kkamak-check/.km/gate-outcomes.nd
 ```
 
 `gateExhausted: true`, `rounds` listing two `"verify-failed"` entries,
-`pluginVersion: "0.4.1"`.
+`pluginVersion: "0.4.2"`.
 
 **Cleanup — shred the credential export, then remove the container:**
 
