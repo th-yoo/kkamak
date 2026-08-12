@@ -160,12 +160,24 @@ function onFileEdited(
  * still governs, so a second lost race (a third writer landing in the
  * narrow gap between the retry's own load and its persist) is left alone
  * rather than chased further, same as every other retry in this file.
+ *
+ * `patch` is narrowed to the one field pair a reset ever needs to layer on
+ * top of `INITIAL_STATE` (`onInternalError`'s disarm) — not the full
+ * `GateState`, so a future call site cannot accidentally patch in something
+ * only `INITIAL_STATE` itself should control (`touchedPaths`,
+ * `cycleStartedAt`, ...) and have it silently survive both the first
+ * attempt and the retry.
+ *
+ * The retry's own `host.state.load()` is not locally wrapped, matching
+ * `handleEvent`'s top-level load (`gate.ts:74`): `StateStore.load()` is
+ * documented never to throw, so both rely on that same port contract rather
+ * than defending against a contract violation.
  */
 function resetWithRetry(
   host: GateHost,
   sessionID: string,
   state: GateState,
-  patch: Partial<GateState> = {},
+  patch: Partial<Pick<GateState, "errorStreak" | "disarmed">> = {},
 ): void {
   if (!persist(host, sessionID, { ...INITIAL_STATE, ...patch }, state.updatedAt)) {
     const fresh = host.state.load(sessionID)

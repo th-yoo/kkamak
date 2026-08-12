@@ -201,9 +201,14 @@ export interface SensorLine {
    * is absent. Both booleans follow this rule identically since they are
    * computed from the same set.
    *
-   * Also absent on a `skippedStop` or `interrupted` line where absence is
-   * more honest than `false` — see the callers in gate.ts for the specific
-   * reasoning per line shape.
+   * Also absent on a `skippedStop` diagnostic line specifically — not on
+   * every `interrupted` line: a cycle preempted mid-flight (`interrupted`
+   * true, `skippedStop` absent) still tags from what was touched before
+   * preemption, since that reset is the cycle's genuine end. Only the
+   * `skippedStop` shape (armed but never reached a stop; see its own doc
+   * comment) has a not-yet-final touched set, which is why gate.ts omits
+   * `cycleTags()` there specifically. See the callers in gate.ts for the
+   * per-line-shape reasoning.
    */
   sameTurnCoEdit?: boolean
 }
