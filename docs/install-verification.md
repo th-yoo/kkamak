@@ -1,11 +1,32 @@
 # Install verification
 
-This is the procedure a maintainer runs, on a real machine, after pushing the
-`0.4.2` tag, to prove the release is actually installable. It is a runbook,
-not a report: nothing in this file has been executed as written. A green
-`bun test` run proves the code is correct; it says nothing about whether
-`claude plugin install` on a clean machine actually produces a working gate.
-**Until every step below has been run for real, the release is unproven.**
+This is the procedure a maintainer runs, on a real machine, to prove a
+release is actually installable. A green `bun test` run proves the code is
+correct; it says nothing about whether `claude plugin install` on a clean
+machine actually produces a working gate. **Until every step below has been
+run for real, the release is unproven.**
+
+**Run it BEFORE tagging, not after — the install never fetches the tag.**
+Measured: `claude plugin marketplace add` clones the repository's **default
+branch**, and the installed cache directory is named from the `version`
+field in `.claude-plugin/plugin.json`, not from any tag. A clone made while
+`main` was five commits past `v0.4.1` checked out `main`, not the tag, and
+still produced a `…/0.4.1/` cache path — so the version in the path proves
+only what `plugin.json` said on that branch. This procedure therefore
+verifies **the current state of the default branch**. Run it while `main`
+holds exactly what you intend to tag, then tag the verified commit. Tagging
+first proves nothing extra and risks publishing a marker for a tree the
+procedure never touched; had a code change landed on `main` after a tag,
+"verifying the release" would have installed something the release does not
+contain.
+
+**Execution history.** This file is a runbook, not a report — but it has
+been executed. `0.4.1` was run end to end on 2026-08-11 (yoo-dev, Linux),
+which is how the five defects corrected that day were found; against `main`
+at `aec746a` rather than the tag, per the clone behaviour above. `0.4.2` was
+run on 2026-08-12 against `main` at `c2ee18d`, the commit subsequently
+tagged, and passed every assertion including a live block
+(`gateExhausted: true`, two `verify-failed` rounds, `pluginVersion 0.4.2`).
 
 ## 0. Why this whole procedure runs against an isolated config, not your real one
 
