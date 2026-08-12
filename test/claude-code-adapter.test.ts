@@ -29,6 +29,38 @@ describe("parseHookInput", () => {
     expect(parsed?.event.kind).toBe("file-edited")
   })
 
+  // A1: tool_input.file_path is the edited path, confirmed against a real
+  // captured Claude Code PostToolUse payload.
+  test.each(EDIT_TOOLS)("carries tool_input.file_path through as the event's path for %s", (tool) => {
+    const raw = payload({ tool_name: tool, tool_input: { file_path: "/repo/src/kernel/gate.ts" } })
+    const parsed = parseHookInput(raw, "PostToolUse")
+    expect(parsed?.event).toEqual({
+      kind: "file-edited",
+      sessionID: "s-1",
+      path: "/repo/src/kernel/gate.ts",
+    })
+  })
+
+  test("a PostToolUse payload with no tool_input.file_path leaves path absent, not undefined-but-present", () => {
+    const raw = payload({ tool_name: "Edit" })
+    const parsed = parseHookInput(raw, "PostToolUse")
+    expect(parsed?.event).toEqual({ kind: "file-edited", sessionID: "s-1" })
+    expect(parsed && "path" in parsed.event).toBe(false)
+  })
+
+  test("a non-string tool_input.file_path leaves path absent rather than passing through garbage", () => {
+    const raw = payload({ tool_name: "Edit", tool_input: { file_path: 7 } })
+    const parsed = parseHookInput(raw, "PostToolUse")
+    expect(parsed && "path" in parsed.event).toBe(false)
+  })
+
+  test("stop-requested and new-user-prompt never carry a path", () => {
+    expect(parseHookInput(payload(), "Stop")?.event).not.toHaveProperty("path")
+    expect(
+      parseHookInput(payload({ hook_event_name: "UserPromptSubmit" }), "UserPromptSubmit")?.event,
+    ).not.toHaveProperty("path")
+  })
+
   // A non-editing tool must not arm the gate, even if the matcher lets it through.
   test.each(["Read", "Bash", "Grep", "edit", "WRITE"])("ignores PostToolUse on %s", (tool) => {
     expect(parseHookInput(payload({ tool_name: tool }), "PostToolUse")).toBeUndefined()

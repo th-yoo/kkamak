@@ -52,6 +52,8 @@ export const OPTIONAL_SENSOR_FIELDS = [
   "skippedStop",
   "forced",
   "roundsMax",
+  "implOnly",
+  "sameTurnCoEdit",
 ] as const satisfies readonly (keyof SensorLine)[]
 
 export interface SensorArgs {
@@ -70,6 +72,14 @@ export interface SensorArgs {
   forced?: boolean
   /** See `SensorLine.roundsMax`: the config's rounds budget, 0 included. */
   roundsMax?: number
+  /**
+   * A1 cycle tagging. Tri-state, unlike skippedStop/forced above: the caller
+   * (gate.ts) passes `undefined` for "unknown" and an explicit `true`/`false`
+   * for "known" — both must reach the line, so this is checked for
+   * `undefined`, not truthiness. See `SensorLine.implOnly`/`sameTurnCoEdit`.
+   */
+  implOnly?: boolean
+  sameTurnCoEdit?: boolean
 }
 
 /**
@@ -106,5 +116,10 @@ export function buildSensorLine(info: HostInfo, clock: Clock, args: SensorArgs):
   // Not a truthiness check: rounds:0 (observe-only) is a real budget and
   // must stamp a literal 0 rather than vanish.
   if (args.roundsMax !== undefined) line.roundsMax = args.roundsMax
+  // Not a truthiness check either: an explicit `false` is a real answer
+  // ("known: not this shape") distinct from `undefined` ("unknown") — see
+  // SensorArgs.implOnly's doc comment.
+  if (args.implOnly !== undefined) line.implOnly = args.implOnly
+  if (args.sameTurnCoEdit !== undefined) line.sameTurnCoEdit = args.sameTurnCoEdit
   return line
 }

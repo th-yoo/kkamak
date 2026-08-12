@@ -84,6 +84,11 @@ export async function createKkamakPlugin(deps: PluginDeps): Promise<KkamakHooks>
     "tool.execute.after": (input) =>
       guarded("tool.execute.after", log, async () => {
         if (!EDIT_TOOLS.includes(input.tool.toLowerCase())) return
+        // A1: deliberately no `path` here. `args: unknown` on this hook's
+        // input means the edited path's shape is unpinned and unverified —
+        // see the module header. GateEvent.path is optional for exactly this
+        // case; the A1 sensor booleans it feeds stay absent on every
+        // opencode line rather than guessing.
         await gate.handle({ kind: "file-edited", sessionID: input.sessionID })
       }),
 

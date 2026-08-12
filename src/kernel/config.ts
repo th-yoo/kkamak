@@ -1,9 +1,25 @@
+import { DEFAULT_TEST_PATH_PATTERN } from "./classify.ts"
 import type { GateConfig } from "./ports.ts"
 
 export const DEFAULT_ROUNDS = 2
 export const DEFAULT_SENSOR_PATH = ".km/gate-outcomes.ndjson"
 export const DEFAULT_CHECK_TIMEOUT_MS = 300_000
 export const DEFAULT_MARKER = false
+
+/**
+ * A string is a usable regex source: compiles under the `RegExp` constructor.
+ * Emptiness is rejected too — a pattern that matches everywhere is not a
+ * plausible user intent and almost certainly a config mistake.
+ */
+function isUsablePattern(x: unknown): x is string {
+  if (typeof x !== "string" || !x) return false
+  try {
+    new RegExp(x)
+    return true
+  } catch {
+    return false
+  }
+}
 
 /** A non-negative integer, and not Infinity/NaN. */
 function isCount(x: unknown): x is number {
@@ -45,5 +61,10 @@ export function parseGateConfig(raw: string | undefined): GateConfig | undefined
     // Matches the frozen contract's own coercion (cc-gate-plugin config.ts):
     // only the JSON literal `true` turns it on, any other value is off.
     marker: j.marker === true,
+    // A1: heuristic test-path classifier pattern (src/kernel/classify.ts).
+    // Never influences a gate decision — telemetry only — so a malformed
+    // value falls back to the default same as every field above, it does
+    // not disable the gate.
+    testPathPattern: isUsablePattern(j.testPathPattern) ? j.testPathPattern : DEFAULT_TEST_PATH_PATTERN,
   }
 }

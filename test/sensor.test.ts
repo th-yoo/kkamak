@@ -151,23 +151,27 @@ describe("buildSensorLine", () => {
 })
 
 describe("additive fields", () => {
-  test("declares the four optional fields", () => {
+  test("declares the six optional fields", () => {
     expect([...OPTIONAL_SENSOR_FIELDS].sort()).toEqual([
       "checkMs",
       "forced",
+      "implOnly",
       "roundsMax",
+      "sameTurnCoEdit",
       "skippedStop",
     ])
   })
 
   // Existing consumers must not have to learn a new field to keep working.
-  test("omits all four when not supplied, so an ordinary line is unchanged", () => {
+  test("omits all six when not supplied, so an ordinary line is unchanged", () => {
     const line = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds] })
     expect(Object.keys(line).sort()).toEqual([...SENSOR_FIELDS].sort())
     expect("checkMs" in line).toBe(false)
     expect("skippedStop" in line).toBe(false)
     expect("forced" in line).toBe(false)
     expect("roundsMax" in line).toBe(false)
+    expect("implOnly" in line).toBe(false)
+    expect("sameTurnCoEdit" in line).toBe(false)
   })
 
   // A2: the budget the cycle was measured against. Without it, two windows
@@ -239,6 +243,51 @@ describe("additive fields", () => {
 
   test("a forced line survives a JSON round trip", () => {
     const line = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds], forced: true })
+    expect(JSON.parse(JSON.stringify(line))).toEqual(line)
+    expect(JSON.stringify(line)).not.toContain("\n")
+  })
+
+  // A1: cycle tagging. buildSensorLine only threads the pre-computed
+  // booleans through — gate.ts owns deriving them from touched paths.
+  test("threads implOnly and sameTurnCoEdit through when supplied", () => {
+    const implOnly = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds], implOnly: true })
+    expect(implOnly.implOnly).toBe(true)
+    const coEdit = buildSensorLine(info, clock, {
+      ...base,
+      rounds: [...base.rounds],
+      sameTurnCoEdit: true,
+    })
+    expect(coEdit.sameTurnCoEdit).toBe(true)
+  })
+
+  test("implOnly and sameTurnCoEdit are independent — supplying one does not force the other on", () => {
+    const line = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds], implOnly: true })
+    expect("sameTurnCoEdit" in line).toBe(false)
+  })
+
+  // Unlike skippedStop/forced (rare-true flags where false IS the omitted
+  // default), implOnly/sameTurnCoEdit are tri-state: gate.ts distinguishes
+  // "known false" from "unknown" (see SensorLine's doc comments), so
+  // buildSensorLine must preserve an explicit false rather than treating it
+  // as absent.
+  test("stamps an explicit false, distinct from omitting the field entirely", () => {
+    const line = buildSensorLine(info, clock, {
+      ...base,
+      rounds: [...base.rounds],
+      implOnly: false,
+      sameTurnCoEdit: false,
+    })
+    expect(line.implOnly).toBe(false)
+    expect(line.sameTurnCoEdit).toBe(false)
+  })
+
+  test("an implOnly/sameTurnCoEdit line survives a JSON round trip", () => {
+    const line = buildSensorLine(info, clock, {
+      ...base,
+      rounds: [...base.rounds],
+      implOnly: false,
+      sameTurnCoEdit: true,
+    })
     expect(JSON.parse(JSON.stringify(line))).toEqual(line)
     expect(JSON.stringify(line)).not.toContain("\n")
   })

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { CHECK_CLAMP_MARGIN_MS, createGate } from "../src/kernel/gate.ts"
-import { INITIAL_STATE } from "../src/kernel/state.ts"
+import { INITIAL_STATE, TOUCHED_PATHS_CAP } from "../src/kernel/state.ts"
 import { FAIL, FakeClock, makeHarness, PASS } from "./fakes.ts"
 
 const SESSION = "sess-1"
@@ -928,5 +928,160 @@ describe("per-round check timing", () => {
     await gate.handle(edit)
     await gate.handle(stop)
     expect(h.store.peek(SESSION)?.checkMs).toEqual([])
+  })
+})
+
+describe("A1: cycle tagging (implOnly / sameTurnCoEdit)", () => {
+  const editAt = (path: string) => ({ kind: "file-edited", sessionID: SESSION, path }) as const
+
+  test("touches only source: implOnly true, sameTurnCoEdit false", async () => {
+    const h = makeHarness({ script: [PASS] })
+    const gate = createGate(h.host)
+    await gate.handle(editAt("src/kernel/gate.ts"))
+    await gate.handle(editAt("src/kernel/state.ts"))
+    await gate.handle(stop)
+    expect(h.sensor.lines[0]).toMatchObject({ implOnly: true, sameTurnCoEdit: false })
+  })
+
+  test("touches source and a test file in the same cycle: sameTurnCoEdit true, implOnly false", async () => {
+    const h = makeHarness({ script: [PASS] })
+    const gate = createGate(h.host)
+    await gate.handle(editAt("src/kernel/gate.ts"))
+    await gate.handle(editAt("test/gate.test.ts"))
+    await gate.handle(stop)
+    expect(h.sensor.lines[0]).toMatchObject({ implOnly: false, sameTurnCoEdit: true })
+  })
+
+  test("touches only test files: neither implOnly nor sameTurnCoEdit", async () => {
+    const h = makeHarness({ script: [PASS] })
+    const gate = createGate(h.host)
+    await gate.handle(editAt("test/gate.test.ts"))
+    await gate.handle(stop)
+    expect(h.sensor.lines[0]).toMatchObject({ implOnly: false, sameTurnCoEdit: false })
+  })
+
+  test("repeated edits to the same path do not change classification", async () => {
+    const h = makeHarness({ script: [PASS] })
+    const gate = createGate(h.host)
+    await gate.handle(editAt("src/kernel/gate.ts"))
+    await gate.handle(editAt("src/kernel/gate.ts"))
+    await gate.handle(editAt("src/kernel/gate.ts"))
+    await gate.handle(stop)
+    expect(h.sensor.lines[0]).toMatchObject({ implOnly: true, sameTurnCoEdit: false })
+  })
+
+  // The opencode adapter supplies no path at all (unpinned arg shape) — both
+  // fields must stay absent, not a guessed false. Same shape as a plain
+  // `edit` (no path) used throughout the rest of this file.
+  test("no path ever supplied (opencode-shaped): both fields absent, not false", async () => {
+    const h = makeHarness({ script: [PASS] })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    const line = h.sensor.lines[0] as unknown as Record<string, unknown>
+    expect("implOnly" in line).toBe(false)
+    expect("sameTurnCoEdit" in line).toBe(false)
+  })
+
+  test("honours a custom testPathPattern from config", async () => {
+    const h = makeHarness({
+      raw: '{"check":"bun test","testPathPattern":"(^|/)checks(/|$)"}',
+      script: [PASS],
+    })
+    const gate = createGate(h.host)
+    await gate.handle(editAt("src/kernel/gate.ts"))
+    await gate.handle(editAt("checks/gate.ts"))
+    await gate.handle(stop)
+    expect(h.sensor.lines[0]).toMatchObject({ implOnly: false, sameTurnCoEdit: true })
+  })
+
+  test("truncation: hitting the touched-paths cap makes both fields absent, not silently wrong", async () => {
+    const h = makeHarness({ script: [PASS] })
+    const gate = createGate(h.host)
+    for (let i = 0; i < TOUCHED_PATHS_CAP; i++) {
+      await gate.handle(editAt(`src/gen/file-${i}.ts`))
+    }
+    // One more distinct path pushes past the cap.
+    await gate.handle(editAt("test/one-more.test.ts"))
+    expect(h.store.peek(SESSION)?.touchedTruncated).toBe(true)
+    await gate.handle(stop)
+    const line = h.sensor.lines[0] as unknown as Record<string, unknown>
+    expect("implOnly" in line).toBe(false)
+    expect("sameTurnCoEdit" in line).toBe(false)
+  })
+
+  test("stays under the cap when every edit is a repeat of the same distinct paths", async () => {
+    const h = makeHarness({ script: [PASS] })
+    const gate = createGate(h.host)
+    for (let i = 0; i < TOUCHED_PATHS_CAP + 50; i++) {
+      await gate.handle(editAt("src/kernel/gate.ts"))
+    }
+    expect(h.store.peek(SESSION)?.touchedTruncated).toBe(false)
+    expect(h.store.peek(SESSION)?.touchedPaths).toHaveLength(1)
+  })
+
+  test("touched paths accumulate in state but a raw path never reaches the sensor line", async () => {
+    const h = makeHarness({ script: [PASS] })
+    const gate = createGate(h.host)
+    await gate.handle(editAt("src/secret/customer-data.ts"))
+    await gate.handle(stop)
+    const serialized = JSON.stringify(h.sensor.lines[0])
+    expect(serialized).not.toContain("secret")
+    expect(serialized).not.toContain("customer-data")
+  })
+
+  test("a skipped-stop diagnostic never stamps these fields, even with paths known", async () => {
+    const h = makeHarness({ fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(editAt("src/kernel/gate.ts"))
+    await gate.handle(prompt)
+    const line = h.sensor.lines[0] as unknown as Record<string, unknown>
+    expect(line.skippedStop).toBe(true)
+    expect("implOnly" in line).toBe(false)
+    expect("sameTurnCoEdit" in line).toBe(false)
+  })
+
+  test("an interrupted open cycle stamps these fields from what was touched before preemption", async () => {
+    const h = makeHarness({ fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(editAt("src/kernel/gate.ts"))
+    await gate.handle(stop) // opens a cycle (blocks)
+    await gate.handle(prompt) // preempts
+    expect(h.sensor.lines[0]).toMatchObject({ interrupted: true, implOnly: true, sameTurnCoEdit: false })
+  })
+
+  test("an exhausted cycle stamps these fields", async () => {
+    const h = makeHarness({ raw: '{"check":"bun test","rounds":0}', fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(editAt("test/gate.test.ts"))
+    await gate.handle(stop)
+    expect(h.sensor.lines[0]).toMatchObject({ gateExhausted: true, implOnly: false, sameTurnCoEdit: false })
+  })
+
+  test("touched paths reset with the rest of per-cycle state after an accept", async () => {
+    const h = makeHarness({ script: [PASS, PASS] })
+    const gate = createGate(h.host)
+    await gate.handle(editAt("src/kernel/gate.ts"))
+    await gate.handle(editAt("test/gate.test.ts"))
+    await gate.handle(stop)
+    expect(h.store.peek(SESSION)?.touchedPaths).toEqual([])
+    expect(h.store.peek(SESSION)?.touchedTruncated).toBe(false)
+
+    // The next cycle starts clean: source-only, so implOnly true this time.
+    await gate.handle(editAt("src/kernel/state.ts"))
+    await gate.handle(stop)
+    expect(h.sensor.lines[1]).toMatchObject({ implOnly: true, sameTurnCoEdit: false })
+  })
+
+  // Hard rule from the spec: the classifier is a heuristic and must never
+  // influence a gate decision — only ever a telemetry field. A cycle whose
+  // every touched path is a "test path" by the classifier still blocks and
+  // exhausts exactly like any other failing cycle.
+  test("classification never changes a block/exhaust decision, however the paths classify", async () => {
+    const h = makeHarness({ raw: '{"check":"bun test","rounds":1}', fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(editAt("test/gate.test.ts"))
+    const decision = await gate.handle(stop)
+    expect(decision.kind).toBe("block")
   })
 })

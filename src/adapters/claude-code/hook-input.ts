@@ -57,7 +57,23 @@ export function parseHookInput(raw: string, eventName: string): ParsedHookInput 
       const tool = record.tool_name
       if (typeof tool !== "string") return undefined
       if (!EDIT_TOOLS.includes(tool)) return undefined
-      return { event: { kind: "file-edited", sessionID }, root }
+      // A1: the edited path, confirmed against a real captured payload
+      // alongside tool_name/session_id/cwd. Omitted entirely (not `undefined`
+      // assigned) when absent or the wrong shape, matching GateEvent.path's
+      // optional-property contract — opencode's adapter relies on the same
+      // omission since its own arg shape is unpinned (see opencode-types.ts).
+      const toolInput = record.tool_input
+      const path =
+        typeof toolInput === "object" && toolInput !== null
+          ? (toolInput as Record<string, unknown>).file_path
+          : undefined
+      return {
+        event:
+          typeof path === "string" && path
+            ? { kind: "file-edited", sessionID, path }
+            : { kind: "file-edited", sessionID },
+        root,
+      }
     }
     default:
       return undefined

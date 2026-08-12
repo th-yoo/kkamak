@@ -6,9 +6,10 @@
 // The governing rule is fail-open. A gate that wedges a session is worse than
 // no gate at all, so every failure path — unreadable config, crashed check,
 // unwritable state, a bug in this file — resolves to "allow".
+import { isTestPath } from "./classify.ts"
 import { parseGateConfig } from "./config.ts"
 import { buildSensorLine, type SensorArgs } from "./sensor.ts"
-import { INITIAL_STATE } from "./state.ts"
+import { INITIAL_STATE, TOUCHED_PATHS_CAP } from "./state.ts"
 import type {
   CheckResult,
   Gate,
@@ -76,7 +77,7 @@ async function handleEvent(host: GateHost, event: GateEvent): Promise<GateDecisi
 
   switch (event.kind) {
     case "file-edited":
-      return onFileEdited(host, event.sessionID, state, config)
+      return onFileEdited(host, event.sessionID, state, config, event.path)
     case "new-user-prompt":
       return onNewUserPrompt(host, event.sessionID, state, config)
     case "stop-requested":
@@ -85,28 +86,89 @@ async function handleEvent(host: GateHost, event: GateEvent): Promise<GateDecisi
 }
 
 /**
+ * A1: fold one newly-observed path into the cycle's touched-path set.
+ * `undefined` (a harness that reports no path, e.g. opencode) and an
+ * already-seen path both leave the set untouched. Once the cap is hit, a new
+ * distinct path is dropped rather than added, and `truncated` flips instead
+ * — the cap bounds the state record, the flag says the set can no longer be
+ * trusted as complete (see `cycleTags` for what that means downstream).
+ */
+function accumulateTouchedPath(
+  paths: readonly string[],
+  truncated: boolean,
+  path: string | undefined,
+): { paths: string[]; truncated: boolean; changed: boolean } {
+  if (path === undefined || paths.includes(path)) {
+    return { paths: [...paths], truncated, changed: false }
+  }
+  if (paths.length >= TOUCHED_PATHS_CAP) {
+    return { paths: [...paths], truncated: true, changed: !truncated }
+  }
+  return { paths: [...paths, path], truncated, changed: true }
+}
+
+/**
  * Arming. A repo with no usable gate.json accumulates no state at all.
  *
- * Audited (docs/known-issues.md #8): this persist's return is ignored on
- * purpose, unlike onNewUserPrompt's reset. The payload only ever changes
- * `edited` false→true, so losing the compare-and-swap against another
- * concurrent file-edited write is harmless — that writer set the same
- * field to the same value, so the flag ends up true either way. Losing it
- * against a concurrent reset (accept/exhaust/interrupt) drops this one
- * edit's `edited` mark, which under-gates rather than over-blocks — the
- * same direction the file header's fail-open rule already calls for, and
- * the same conclusion the original review already reached for this exact
- * line ("a failed arm on file-edited simply leaves the gate disarmed").
+ * Audited (docs/known-issues.md #8), extended for A1: earlier this persist's
+ * return was ignored because the payload only ever flipped `edited`
+ * false→true, so losing the compare-and-swap against another concurrent
+ * file-edited write was harmless — that writer set the same field to the
+ * same value. A1 adds a second payload, the touched-path set, that keeps
+ * changing across the whole cycle rather than settling after the first
+ * write — so this now persists on every edit that adds a new distinct path
+ * or newly trips the truncation cap, not just the first. The race reasoning
+ * still holds in the same direction: losing this compare-and-swap drops one
+ * edit's path from the set (or, rarely, the truncation flip), which
+ * under-gates the *telemetry* rather than over-blocking anything — the
+ * classifier never gates a decision (see `classify.ts`), so a dropped path
+ * costs a possibly-wrong `implOnly`/`sameTurnCoEdit` field, never a wedged
+ * turn. Losing it against a concurrent reset still just leaves the gate
+ * disarmed, same as before.
  */
 function onFileEdited(
   host: GateHost,
   sessionID: string,
   state: GateState,
   config: GateConfig | undefined,
+  path: string | undefined,
 ): GateDecision {
-  if (!config || state.edited) return ALLOW
-  persist(host, sessionID, { ...state, edited: true }, state.updatedAt)
+  if (!config) return ALLOW
+  const touched = accumulateTouchedPath(state.touchedPaths, state.touchedTruncated, path)
+  if (state.edited && !touched.changed) return ALLOW
+  persist(
+    host,
+    sessionID,
+    { ...state, edited: true, touchedPaths: touched.paths, touchedTruncated: touched.truncated },
+    state.updatedAt,
+  )
   return ALLOW
+}
+
+/**
+ * A1: derive the cycle-tagging sensor booleans from the touched-path set.
+ * Returns `{}` (both fields absent from the built line) rather than `false`
+ * whenever the set cannot be trusted to answer the question:
+ *
+ * - no paths known at all — a harness that reports none (opencode), or a
+ *   state record written before this field existed;
+ * - the set was truncated — a truncated set has already dropped paths, so no
+ *   test path among what remains cannot be told apart from no test path
+ *   ever having been touched, and a field that can be silently wrong is
+ *   worse than one that is absent.
+ *
+ * Otherwise both are real booleans, never both true (a path is source or
+ * test, not both, by the same classifier call).
+ */
+function cycleTags(
+  touchedPaths: readonly string[],
+  touchedTruncated: boolean,
+  testPathPattern: string,
+): Pick<SensorArgs, "implOnly" | "sameTurnCoEdit"> {
+  if (touchedTruncated || touchedPaths.length === 0) return {}
+  const hasTest = touchedPaths.some((p) => isTestPath(p, testPathPattern))
+  const hasSource = touchedPaths.some((p) => !isTestPath(p, testPathPattern))
+  return { implOnly: hasSource && !hasTest, sameTurnCoEdit: hasSource && hasTest }
 }
 
 /**
@@ -126,6 +188,13 @@ function onNewUserPrompt(
     // rather than dropping the boundary silently. State is left untouched — the
     // session stays armed, so the next real stop measures the edits
     // cumulatively.
+    //
+    // A1: deliberately no cycleTags() here. The touched-path set at this
+    // instant is not final — more edits accumulate under this same still-armed
+    // session, and whichever line eventually closes the cycle will tag the
+    // complete set. Stamping a snapshot now would describe a cycle that has
+    // not actually finished; absence is more honest than a same-cycle
+    // duplicate that may not even match the eventual outcome.
     if (config && state.edited) {
       record(host, config.sensor, {
         sessionID,
@@ -156,6 +225,7 @@ function onNewUserPrompt(
       durationMs: elapsed(host, state.cycleStartedAt),
       marker: false,
       roundsMax: config.rounds,
+      ...cycleTags(state.touchedPaths, state.touchedTruncated, config.testPathPattern),
     })
   }
 
@@ -250,6 +320,7 @@ async function onStopRequested(
       durationMs: elapsed(host, startedAt),
       marker: config.marker,
       roundsMax: config.rounds,
+      ...cycleTags(state.touchedPaths, state.touchedTruncated, config.testPathPattern),
     })
     persist(host, sessionID, { ...INITIAL_STATE }, state.updatedAt)
     return config.marker ? { kind: "allow", marker: HYGIENE_MARKER } : ALLOW
@@ -303,6 +374,7 @@ async function onStopRequested(
     // see GateConfig.marker's doc comment.
     marker: false,
     roundsMax: config.rounds,
+    ...cycleTags(state.touchedPaths, state.touchedTruncated, config.testPathPattern),
   })
   persist(host, sessionID, { ...INITIAL_STATE }, state.updatedAt)
   return {

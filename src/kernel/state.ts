@@ -10,8 +10,17 @@ export const INITIAL_STATE: GateState = {
   cycleStartedAt: 0,
   errorStreak: 0,
   disarmed: false,
+  touchedPaths: [],
+  touchedTruncated: false,
   updatedAt: 0,
 }
+
+/**
+ * Bound on `GateState.touchedPaths`, so a large refactor cannot grow the
+ * state record without limit. Hitting it sets `touchedTruncated` instead of
+ * recording further paths.
+ */
+export const TOUCHED_PATHS_CAP = 200
 
 const OUTCOMES: readonly string[] = ["accepted", "verify-failed"] satisfies RoundOutcome[]
 
@@ -30,7 +39,10 @@ export function isInitialState(s: GateState): boolean {
     !s.checkMs?.length &&
     s.cycleStartedAt === 0 &&
     s.errorStreak === 0 &&
-    !s.disarmed
+    !s.disarmed &&
+    // Same pre-existence tolerance as checkMs.
+    !s.touchedPaths?.length &&
+    !s.touchedTruncated
   )
 }
 
@@ -54,7 +66,10 @@ export function isGateState(x: unknown): x is GateState {
     Array.isArray(s.outcomes) &&
     s.outcomes.every((o) => typeof o === "string" && OUTCOMES.includes(o)) &&
     (s.checkMs === undefined ||
-      (Array.isArray(s.checkMs) && s.checkMs.every((ms) => typeof ms === "number")))
+      (Array.isArray(s.checkMs) && s.checkMs.every((ms) => typeof ms === "number"))) &&
+    (s.touchedPaths === undefined ||
+      (Array.isArray(s.touchedPaths) && s.touchedPaths.every((p) => typeof p === "string"))) &&
+    (s.touchedTruncated === undefined || typeof s.touchedTruncated === "boolean")
   )
 }
 
@@ -63,5 +78,11 @@ export function isGateState(x: unknown): x is GateState {
  * loaded record can never alias — or be missing — what the kernel then spreads.
  */
 export function normalizeGateState(s: GateState): GateState {
-  return { ...s, outcomes: [...s.outcomes], checkMs: [...(s.checkMs ?? [])] }
+  return {
+    ...s,
+    outcomes: [...s.outcomes],
+    checkMs: [...(s.checkMs ?? [])],
+    touchedPaths: [...(s.touchedPaths ?? [])],
+    touchedTruncated: s.touchedTruncated ?? false,
+  }
 }

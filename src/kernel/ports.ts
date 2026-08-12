@@ -29,6 +29,16 @@ export interface GateState {
   errorStreak: number
   /** Terminal for this session: the gate gave up and allows everything. */
   disarmed: boolean
+  /**
+   * Distinct paths edited this cycle (A1), as reported by the harness —
+   * absent entirely on a harness that reports no paths (opencode). Bounded
+   * by `TOUCHED_PATHS_CAP` (state.ts); `touchedTruncated` records that the
+   * cap was hit and the set is partial. Paths live ONLY here, in local
+   * gitignored state — they are never emitted on a sensor line, only the
+   * booleans derived from them (`SensorLine.implOnly`/`sameTurnCoEdit`).
+   */
+  touchedPaths: string[]
+  touchedTruncated: boolean
   updatedAt: number
 }
 
@@ -54,6 +64,15 @@ export interface GateConfig {
    * cross-session persistence.
    */
   marker: boolean
+  /**
+   * Regex source (case-insensitive) classifying a path as a test path for
+   * the A1 cycle-tagging sensors (`implOnly`/`sameTurnCoEdit`) — see
+   * `src/kernel/classify.ts`. A HEURISTIC: it never influences a gate
+   * decision, only these telemetry booleans. Defaults to
+   * `DEFAULT_TEST_PATH_PATTERN`; parsed with the same never-throw discipline
+   * as every other field here (a malformed value falls back to the default).
+   */
+  testPathPattern: string
 }
 
 /** One append-only sensor line, written once per completed gate cycle. */
@@ -155,6 +174,38 @@ export interface SensorLine {
    * adopted from the packaging-milestone deferral.
    */
   forced?: boolean
+  /**
+   * The cycle touched source files and no test files, by the heuristic path
+   * classifier (`src/kernel/classify.ts`). A1 cycle tagging. Optional:
+   * absent when there is nothing to compute it from — no paths known (an
+   * opencode line, or a pre-A1 record) or the touched set was hit-and-run
+   * before this field could be trusted; see `sameTurnCoEdit`'s doc comment
+   * for the truncation reasoning shared by both. Never a raw path: only
+   * this derived boolean ever reaches the sensor line — a hard privacy
+   * line, since the sensor file is a durable, non-gitignored artifact and
+   * file paths are user data.
+   */
+  implOnly?: boolean
+  /**
+   * The cycle touched both source and test files in the same turn —
+   * implementation and its tests authored together, the exact shape behind
+   * both real defects the gate missed (see docs/dogfood-log.md). A1 cycle
+   * tagging, by the same heuristic classifier as `implOnly`.
+   *
+   * Absent, not `false`, whenever the touched-paths set could not be
+   * trusted to answer the question: no paths known at all (opencode; a
+   * pre-A1 record), or `GateState.touchedTruncated` is set — a truncated
+   * set has already dropped touched paths, so no test path seen among what
+   * remains cannot be told apart from no test path ever having been
+   * touched, and a field that can be silently wrong is worse than one that
+   * is absent. Both booleans follow this rule identically since they are
+   * computed from the same set.
+   *
+   * Also absent on a `skippedStop` or `interrupted` line where absence is
+   * more honest than `false` — see the callers in gate.ts for the specific
+   * reasoning per line shape.
+   */
+  sameTurnCoEdit?: boolean
 }
 
 // ── Events in ───────────────────────────────────────────────────────────────
@@ -163,7 +214,7 @@ export interface SensorLine {
 // kernel never sees a tool name, a hook name, or a harness payload.
 
 export type GateEvent =
-  | { kind: "file-edited"; sessionID: string }
+  | { kind: "file-edited"; sessionID: string; path?: string }
   | { kind: "stop-requested"; sessionID: string }
   | { kind: "new-user-prompt"; sessionID: string }
 
