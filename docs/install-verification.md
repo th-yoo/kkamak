@@ -33,6 +33,18 @@ directory, and a live block ending in exhaustion whose sensor line read
 `gateExhausted: true`, two `verify-failed` rounds, `pluginVersion 0.5.0`,
 `product "kkamak"`, `roundsMax 1`.
 
+`0.6.0` was run on 2026-08-12 against `main` at `7e3c64e`, the commit
+subsequently tagged, via the **container variant** (the runbook's first
+macOS execution — step 3's host path is impossible there, exactly as its
+own limitation note says): a clean `ubuntu:24.04` podman container,
+GitHub-clone marketplace install, exactly one `/0.6.0/` cache directory,
+and a real blocked-then-exhausted agent turn whose sensor line read
+`gateExhausted: true`, two `verify-failed` rounds, `pluginVersion 0.6.0`,
+`product "kkamak"`, `roundsMax 1` — plus this release's own new fields,
+live from a real turn: `implOnly: true`, `sameTurnCoEdit: false`. The
+agent also declined, unprompted, to edit `gate.json` to force a pass —
+gate-avoidance pressure resisted by the subject itself, worth recording.
+
 `0.5.0` was *also* run before that merge, against the same tree installed
 from a **directory-source** marketplace instead of a GitHub clone. That is
 the only pre-merge verification this procedure's own clone behaviour allows:
@@ -128,7 +140,7 @@ dir from an earlier run, for instance):
 ls -d "$CLAUDE_CONFIG_DIR/plugins/cache/kkamak/kkamak/"*/
 ```
 
-This must print exactly one path, ending in `/0.5.0/`.
+This must print exactly one path, ending in `/0.6.0/`.
 
 Confirm the files this release adds are present in that one version
 directory (these are new in `0.4.0`; their absence would mean the cache
@@ -259,7 +271,7 @@ list two `"verify-failed"` entries. `"accepted"` will read `true` here too —
 that field means "the stop was ultimately allowed through" (exhaustion always
 ends by allowing the stop), not "the check passed"; no code path ever writes
 `"accepted": false`, so it is not useful as a failure signal on its own.
-`"pluginVersion"` must read `"0.5.0"` — that field is the durable proof that
+`"pluginVersion"` must read `"0.6.0"` — that field is the durable proof that
 the session ran the copy this release installed, not a leftover older one.
 
 ## 4. Cleanup
@@ -414,7 +426,7 @@ podman exec -e PATH="$CPATH" "$NAME" cat /root/kkamak-check/.km/gate-outcomes.nd
 ```
 
 `gateExhausted: true`, `rounds` listing two `"verify-failed"` entries,
-`pluginVersion: "0.5.0"`.
+`pluginVersion: "0.6.0"`.
 
 **Cleanup — shred the credential export, then remove the container:**
 
