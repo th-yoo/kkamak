@@ -395,3 +395,41 @@ that the public kernel doesn't read it. It is intentionally present for a
 consumer outside this repo's own kernel. If the public-facing sample gate.json
 shown in README.md or elsewhere needs to omit it for clarity, that's a
 different file than this repo's own root `gate.json` — don't conflate the two.
+
+## 10. The `checkTimeoutMs` clamp's warning never reaches the user under Claude Code
+
+Found while executing `docs/install-verification.md` against 0.5.0, before merging it.
+
+The A4 clamp (0.5.0) stops a `checkTimeoutMs` set at or above the `Stop` hook's
+own 600s ceiling from getting the hook process killed mid-check, which
+previously destroyed the whole cycle: no state written, no round consumed, no
+record — indistinguishable from a gate that never ran. That protection works,
+verified end to end through a real plugin install.
+
+The warning does not. The clamp reports through `note()`
+(`src/kernel/gate.ts`), which reaches `StderrLogger` and therefore the hook
+process's stderr. **Measured:** running a real `claude -p` session in a scratch
+repo whose `gate.json` set `checkTimeoutMs: 600000` produced a normal sensor
+line and no warning anywhere in the session output; driving the same installed
+`hook-cli.ts` directly against the same repo printed the full line
+(`kkamak: checkTimeoutMs 600000 leaves no margin under the host's 600000ms stop
+ceiling — running the check with 595000ms instead; set checkTimeoutMs to at
+most 595000 in gate.json`). So the message exists and is correct; Claude Code
+simply does not surface hook stderr in an ordinary session.
+
+**Why it is not routed to the user-facing channel.** README's "Delivery
+channels" section is accurate: `notice` reaches the user as a `systemMessage`.
+But `notice` lives on `GateDecision`, and the clamp happens *before* the check
+runs — there is no decision yet to attach it to. Threading a pending warning
+into the eventual decision would cover the allow paths only:
+`GateDecision.block` has no `notice` field at all, so a clamp on a blocking
+cycle would stay invisible unless one were added. That is a design change to
+the decision type, not a small fix.
+
+**Judgement: recorded, not fixed.** The consequence is bounded and one-
+directional — a user with a misconfigured `checkTimeoutMs` silently gets a
+shorter check than they asked for, rather than silently losing the entire
+cycle as before. That is strictly better than 0.4.2 and strictly worse than
+being told. Both `README.md` and `CHANGELOG.md` were corrected to describe the
+clamp as silent protection rather than as a warning, so the docs do not
+promise a message that never arrives.

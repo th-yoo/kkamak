@@ -63,7 +63,9 @@ Keep the check cheap. It runs every time the agent tries to finish a turn in whi
 
 Keep `checkTimeoutMs` under 600000 (600s): the `Stop` hook in `hooks/hooks.json` has its own 600s timeout, and if that fires first, Claude Code kills the hook process before the gate records a decision — fail-open still holds (no state written, no round consumed), but the check silently never gets its full configured time.
 
-Since 0.5.0 the gate no longer lets that happen silently. Under Claude Code it knows the hook's own ceiling, and a `checkTimeoutMs` that leaves no room beneath it is clamped to fit, with a stderr line naming both numbers and the largest value that would fit. The gate needs a slice of that ceiling for itself — loading state, running the check, writing the record — and a configured value that consumes all of it is a value the process gets killed in the middle of. Under opencode nothing kills the handler, so nothing is clamped.
+Since 0.5.0 the cycle survives that misconfiguration. Under Claude Code the gate knows the hook's own ceiling, and a `checkTimeoutMs` that leaves no room beneath it is clamped to fit, so the check is cut short but the decision, the round and the sensor line are all still recorded. The gate needs a slice of that ceiling for itself — loading state, running the check, writing the record — and a configured value that consumes all of it is a value the process gets killed in the middle of. Under opencode nothing kills the handler, so nothing is clamped.
+
+**The clamp is silent from where you sit.** It writes a line naming both numbers and the largest value that would fit, but that line goes to the hook process's stderr, which Claude Code does not surface in an ordinary session — measured, not assumed (`docs/known-issues.md` #10). You will see it if you run the hook CLI directly; you will not see it while working. So the clamp is best understood as protection, not as a warning: if you want to know whether your `checkTimeoutMs` is over the line, compare it against 600000 yourself rather than waiting to be told.
 
 ## What kkamak can and cannot touch
 

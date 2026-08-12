@@ -32,11 +32,14 @@ consumer contract tolerates their absence, so existing readers are unaffected.
 ### Changed
 
 - Under Claude Code, a `checkTimeoutMs` that leaves no margin beneath the
-  `Stop` hook's own 600s ceiling is now clamped to fit, and the gate says so
-  on stderr with both numbers and the largest value that would fit.
-  Previously the host killed the hook mid-check and the cycle vanished
-  entirely — no state, no round consumed, no notice, indistinguishable from
-  a gate that never ran. The margin's base is measured (worst-case 78.8ms of
+  `Stop` hook's own 600s ceiling is now clamped to fit, so the cycle is
+  recorded instead of being killed in the middle. Previously the host killed
+  the hook mid-check and the cycle vanished entirely — no state, no round
+  consumed, no notice, indistinguishable from a gate that never ran. The
+  clamp writes a line naming both numbers, but it goes to hook stderr, which
+  Claude Code does not surface in an ordinary session — so this ships as
+  silent protection, not as a warning the user will read
+  (`docs/known-issues.md` #10). The margin's base is measured (worst-case 78.8ms of
   non-check overhead across 15 end-to-end hook runs); the headroom factor on
   top of it is a declared judgement, documented as such at
   `CHECK_CLAMP_MARGIN_MS`. The opencode adapter reports no ceiling and is
