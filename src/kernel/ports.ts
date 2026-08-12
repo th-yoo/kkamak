@@ -84,6 +84,17 @@ export interface SensorLine {
   host: string
   app: string
   /**
+   * The `GateConfig.rounds` budget this cycle was measured against — the
+   * denominator `rounds` (the outcomes) was bounded by. Without it, streams
+   * from windows with different `rounds` settings pool silently and an
+   * exhaustion-rate change cannot be attributed to agent behaviour vs a
+   * config edit. Optional on the contract (tolerated-absent, like
+   * `pluginVersion`): lines written before this field existed do not carry
+   * it. This kernel always has the value in hand, so it stamps every line —
+   * including a literal `0` for observe-only configs.
+   */
+  roundsMax?: number
+  /**
    * Per-round check execution time in ms, parallel to `rounds` — except for
    * a cycle already in flight when this field was introduced, whose
    * `checkMs` starts empty and so can be shorter than `rounds` for that one
@@ -122,6 +133,17 @@ export interface SensorLine {
    * packaging-milestone deferral.
    */
   pluginVersion?: string
+  /**
+   * Which codebase emitted this line — this kernel's `package.json` name
+   * (`KERNEL_PRODUCT` in sensor.ts), always stamped, never configurable.
+   * `pluginVersion` cannot carry this: a differently-sourced implementation
+   * can declare the same plugin name and overlapping versions while writing
+   * to the same sensor path, leaving version alone unable to attribute a
+   * line. Optional on the frozen contract (tolerated-absent, like
+   * `pluginVersion`); this kernel always stamps it. Presence, not value, is
+   * the discriminator against producers that predate the field.
+   */
+  product?: string
   /**
    * True iff an env override forced this session's reinject arm rather than
    * being chosen normally. The frozen contract's `forced` covers
@@ -223,6 +245,14 @@ export interface HostInfo {
   app: string
   /** Machine hostname. */
   host: string
+  /**
+   * The harness's kill ceiling on the stop-handling process, in ms — for
+   * Claude Code, the Stop hook's manifest timeout, after which the whole
+   * hook is SIGKILLed. Host-supplied data, not an effect, so kernel purity
+   * holds. Absent when the harness has no such ceiling (opencode's
+   * session.idle): absent means "never clamp", not "unknown ceiling".
+   */
+  stopTimeoutMs?: number
 }
 
 export interface GateHost {

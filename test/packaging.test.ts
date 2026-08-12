@@ -2,8 +2,8 @@
 import { describe, expect, test } from "bun:test"
 import fs from "node:fs"
 import path from "node:path"
-import { EDIT_TOOLS, HOOK_EVENTS } from "../src/adapters/claude-code/hook-input.ts"
-import { KERNEL_VERSION } from "../src/kernel/sensor.ts"
+import { EDIT_TOOLS, HOOK_EVENTS, STOP_HOOK_TIMEOUT_MS } from "../src/adapters/claude-code/hook-input.ts"
+import { KERNEL_PRODUCT, KERNEL_VERSION } from "../src/kernel/sensor.ts"
 
 const ROOT = path.resolve(import.meta.dir, "..")
 const read = (rel: string) => JSON.parse(fs.readFileSync(path.join(ROOT, rel), "utf8")) as Record<string, unknown>
@@ -45,6 +45,12 @@ describe("Claude Code plugin manifests", () => {
   // bump. This guards it the same way the plugin.json check above does.
   test("sensor.ts's KERNEL_VERSION matches package.json", () => {
     expect(read("package.json").version).toBe(KERNEL_VERSION)
+  })
+
+  // Same guard for the product-identity stamp (A3): a literal so the kernel
+  // stays I/O-free, pinned to package.json's name so it cannot drift.
+  test("sensor.ts's KERNEL_PRODUCT matches package.json's name", () => {
+    expect(read("package.json").name).toBe(KERNEL_PRODUCT)
   })
 
   // Without a marketplace manifest `claude plugin install` has nothing to
@@ -130,6 +136,30 @@ describe("Claude Code plugin manifests", () => {
         expect(entry.timeout).toBe(event === "Stop" ? 600 : 30)
       }
     }
+  })
+
+  // A4: the manifest's Stop timeout (seconds) and the ceiling the adapter
+  // reports to the kernel (ms) describe the same SIGKILL — they must not
+  // drift, or the clamp guards against a ceiling that no longer exists.
+  test("the Stop hook's manifest timeout and the adapter's ceiling constant agree", () => {
+    const stops = blocks().filter((b) => b.event === "Stop")
+    expect(stops.length).toBeGreaterThan(0)
+    for (const { block } of stops) {
+      for (const entry of block.hooks) {
+        expect(entry.timeout * 1000).toBe(STOP_HOOK_TIMEOUT_MS)
+      }
+    }
+  })
+
+  // Nothing imports hook-cli.ts (importing it would run main), so like the
+  // init-command check above this scans source: the CLI must actually hand
+  // the ceiling to the host, and the opencode adapter — whose session.idle
+  // has no equivalent killable ceiling — must not invent one.
+  test("hook-cli passes the ceiling; the opencode adapter passes none", () => {
+    const cli = fs.readFileSync(path.join(ROOT, "src/adapters/claude-code/hook-cli.ts"), "utf8")
+    expect(cli).toContain("stopTimeoutMs: STOP_HOOK_TIMEOUT_MS")
+    const plugin = fs.readFileSync(path.join(ROOT, "src/adapters/opencode/plugin.ts"), "utf8")
+    expect(plugin).not.toContain("stopTimeoutMs")
   })
 })
 

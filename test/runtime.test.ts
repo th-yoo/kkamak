@@ -450,6 +450,18 @@ describe("createNodeHost", () => {
     expect(host.info.host.length).toBeGreaterThan(0)
   })
 
+  // A4: the ceiling is host-supplied data — present only when the adapter
+  // actually runs under a killable timeout (Claude Code's Stop hook).
+  test("threads a supplied stopTimeoutMs into the host info", () => {
+    const host = createNodeHost({ root: dir, app: "claude-code", stopTimeoutMs: 1_234 })
+    expect(host.info.stopTimeoutMs).toBe(1_234)
+  })
+
+  test("leaves stopTimeoutMs absent when the adapter supplies none", () => {
+    const host = createNodeHost({ root: dir, app: "opencode" })
+    expect(host.info.stopTimeoutMs).toBeUndefined()
+  })
+
   test("supplies every port the kernel requires", () => {
     const host = createNodeHost({ root: dir, app: "claude-code" })
     expect(typeof host.config.read).toBe("function")

@@ -17,12 +17,16 @@ export interface NodeHostOptions {
   root: string
   /** Harness identity recorded on every sensor line, e.g. "claude-code". */
   app: string
+  /** The harness's kill ceiling on the stop-handling process, if it has one — see `HostInfo.stopTimeoutMs`. */
+  stopTimeoutMs?: number
 }
 
 export function createNodeHost(options: NodeHostOptions): GateHost {
-  const { root, app } = options
+  const { root, app, stopTimeoutMs } = options
   return {
-    info: { app, host: systemHostname() },
+    // Spread, not a plain assignment: an adapter that supplies no ceiling
+    // must yield an info with the key absent, matching "never clamp".
+    info: { app, host: systemHostname(), ...(stopTimeoutMs !== undefined ? { stopTimeoutMs } : {}) },
     config: new FileConfigSource(root),
     state: new FileStateStore(path.join(root, STATE_DIR)),
     sensor: new NdjsonSensorSink(root),

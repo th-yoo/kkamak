@@ -7,7 +7,19 @@ import type { Clock, HostInfo, RoundOutcome, SensorLine } from "./ports.ts"
  * from the file at runtime, so this stays a plain literal and the kernel
  * stays free of I/O.
  */
-export const KERNEL_VERSION = "0.4.2"
+export const KERNEL_VERSION = "0.5.0"
+
+/**
+ * Product-identity stamp (A3), stamped into every line's `product` field.
+ * `pluginVersion` alone cannot say which implementation wrote a line: a
+ * differently-sourced build can ship the same plugin name and overlapping
+ * versions into the same sensor file, and telling their lines apart has
+ * previously required single-emitter isolation. Like `KERNEL_VERSION`, a
+ * deliberate literal (pinned to `package.json`'s `name` by
+ * test/packaging.test.ts) so the kernel stays I/O-free — and deliberately
+ * NOT user-configurable: gate.json must not be able to spoof it.
+ */
+export const KERNEL_PRODUCT = "kkamak"
 
 /**
  * The sensor schema, declared as data so a test can assert the built line
@@ -28,6 +40,7 @@ export const SENSOR_FIELDS = [
   "app",
   "marker",
   "pluginVersion",
+  "product",
 ] as const satisfies readonly (keyof SensorLine)[]
 
 /**
@@ -38,6 +51,7 @@ export const OPTIONAL_SENSOR_FIELDS = [
   "checkMs",
   "skippedStop",
   "forced",
+  "roundsMax",
 ] as const satisfies readonly (keyof SensorLine)[]
 
 export interface SensorArgs {
@@ -54,6 +68,8 @@ export interface SensorArgs {
   skippedStop?: boolean
   /** See `SensorLine.forced`'s doc comment: no current caller sets this. */
   forced?: boolean
+  /** See `SensorLine.roundsMax`: the config's rounds budget, 0 included. */
+  roundsMax?: number
 }
 
 /**
@@ -79,11 +95,16 @@ export function buildSensorLine(info: HostInfo, clock: Clock, args: SensorArgs):
     // general "producer may not know" case — so unlike checkMs/skippedStop/
     // forced below, this is never conditional. See SensorLine.pluginVersion.
     pluginVersion: KERNEL_VERSION,
+    // Also unconditional, and never caller-supplied: see KERNEL_PRODUCT.
+    product: KERNEL_PRODUCT,
   }
   // Additive fields last, so the leading columns of the NDJSON stay where a
   // human's eye expects them.
   if (args.checkMs) line.checkMs = [...args.checkMs]
   if (args.skippedStop) line.skippedStop = true
   if (args.forced) line.forced = true
+  // Not a truthiness check: rounds:0 (observe-only) is a real budget and
+  // must stamp a literal 0 rather than vanish.
+  if (args.roundsMax !== undefined) line.roundsMax = args.roundsMax
   return line
 }

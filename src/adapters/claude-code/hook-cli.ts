@@ -9,7 +9,7 @@
 import { createGate } from "../../kernel/index.ts"
 import { createNodeHost } from "../../runtime/index.ts"
 import { planEmit } from "./emit.ts"
-import { parseHookInput } from "./hook-input.ts"
+import { parseHookInput, STOP_HOOK_TIMEOUT_MS } from "./hook-input.ts"
 
 const APP = "claude-code"
 
@@ -29,7 +29,9 @@ async function main(): Promise<void> {
   // ignore it — the kernel's own rounds budget is what guarantees
   // termination, and honouring the flag would cap the gate at a single block
   // regardless of the configured `rounds`.
-  const gate = createGate(createNodeHost({ root: parsed.root, app: APP }))
+  const gate = createGate(
+    createNodeHost({ root: parsed.root, app: APP, stopTimeoutMs: STOP_HOOK_TIMEOUT_MS }),
+  )
   const plan = planEmit(await gate.handle(parsed.event))
 
   if (plan.stdout) process.stdout.write(`${JSON.stringify(plan.stdout)}\n`)
