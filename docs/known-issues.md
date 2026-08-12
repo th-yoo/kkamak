@@ -290,6 +290,55 @@ confirmed-dead pid being reclaimed, and — the case the defect was actually
 about — an old lock whose recorded holder is still alive NOT being reclaimed
 even past the staleness threshold.
 
+## 9. `test/imports.test.ts`'s import scanner is a regex over raw text, not comment-aware — prose can be misread as an import
+
+`importsIn()` (`test/imports.test.ts:36-39`) scans a file's raw source text
+with `/(?:\b(?:import|export)\b[\s\S]*?\bfrom\s*|\bimport\s*|\brequire\s*)
+\(?\s*["']([^"']+)["']/g` — matching the literal words `import`/`export`/
+`require`, followed by any characters at all (`[\s\S]*?`, non-greedy but
+unbounded), then `from` and a quoted string. It never strips comments
+first, so `import`, `export`, `require`, and `from` mean nothing special to
+it inside a `//` or `/* */` comment — they read exactly as code would.
+
+**Concrete instance, hit for real during this work.** A doc comment in
+`src/runtime/file-state-store.ts` read, across two comment lines: `tell
+"old and abandoned" from "old and merely` / `slow" apart in
+reclaimIfStale below...`. The scanner matched `from "old and merely\n
+      // slow"` as an import specifier — a two-line quoted string built by
+treating the comment's own line break as if it were source — and
+`test/imports.test.ts`'s "no import depends on a package that installation
+would leave behind" test failed on it, blocking the turn. Nothing about the
+code was wrong; the words were prose describing what the code does.
+
+That failure was resolved by rewording the comment, not by fixing the
+scanner. The defect is therefore still present on `main`: the next comment
+that happens to contain the word `from` followed eventually by a quoted
+phrase — plausible in any comment describing string handling, error
+messages, or (as here) explaining a data-format distinction in prose — will
+fail the suite the same way, and the cheapest fix available in the moment
+will again be to edit the comment rather than the scanner.
+
+This connects to a limitation already on record. The 0.4.0 pre-release
+review's finding 2 flagged that "the import scan cannot prove itself"
+(`docs/superpowers/plans/2026-07-30-kernel-review-remediation.md:361`) —
+that finding was about **under**-detection, a regex that could miss a real
+violation with nothing to prove otherwise. This is the same root cause
+running the other way: a text regex standing in for real import-graph
+analysis, with neither its precision nor its recall ever fully proven. Both
+directions are consequences of scanning text instead of parsing it.
+
+**Judgement: recorded, not fixed.** A real fix needs either an actual
+parser (so `import`/`from`/`require` are only meaningful in syntactic
+position, never inside a comment or string literal) or, at minimum,
+stripping comments from the source before the regex runs — the latter is a
+smaller change but only closes this specific direction, not the sibling
+under-detection gap finding 2 already named. Leaving it as-is carries a
+real risk beyond an occasional false alarm: it is a test that can fail on
+provably correct code, and a test that does that trains whoever hits it to
+edit until the test stops complaining rather than to trust it — exactly the
+gate-avoidance shape recorded in this session's `docs/dogfood-log.md`
+correction to the 2026-08-11 entry.
+
 ## Regression: `gate.json`'s `gauge` field was wrongly removed, then restored
 
 This repo's own tracked `gate.json` carries `"gauge": true`. The public
