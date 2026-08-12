@@ -5,6 +5,50 @@ All notable changes to this project are documented in this file, starting at 0.4
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Details for each entry live in [`docs/dogfood-log.md`](docs/dogfood-log.md), linked per entry below.
 
+## [0.4.2] - 2026-08-12
+
+`FileStateStore` concurrency hardening, plus doc corrections found across
+three rounds of independent architect review. No breaking changes. Full
+narrative in [dogfood log](docs/dogfood-log.md#2026-08-11--first-sensor-line-produced-by-the-public-plugin-yoo-dev).
+
+### Fixed
+
+- `FileStateStore.save()` no longer blindly overwrites: it compares the
+  on-disk record's `updatedAt` against what the caller loaded and refuses a
+  stale write rather than clobbering a newer one (`docs/known-issues.md` #8)
+  (`1589ae1`)
+- `save()`'s whole read-modify-write — not just the final rename — now runs
+  under a best-effort advisory lockfile, closing the remaining
+  compare-to-rename race window; reclaiming an abandoned lock requires both
+  age *and* a confirmed-dead holder pid (`process.kill(pid, 0)` throwing
+  `ESRCH`), not age alone, so a merely slow holder can't have its lock
+  stolen (`93b7986`, `c2a48e3`)
+- `onNewUserPrompt`'s reset now checks its own `persist()` failure and
+  retries once against freshly-loaded state on a lost race, instead of
+  silently leaving a concurrent block's round count behind for a later,
+  unrelated cycle to inherit and over-exhaust on (`c2a48e3`)
+- `docs/install-verification.md`: five defects in the runbook — the
+  isolated-config auth problem does apply on Linux, the isolated
+  `.claude.json` needs `hasCompletedOnboarding`, `claude plugin install`
+  prints no version, a token-free `claude auth status` pre-check was
+  missing, and headless `claude -p` needs `--permission-mode acceptEdits`
+  or the gate never arms (`89a455b`)
+- `docs/install-verification.md`: two more overclaims in that same auth
+  pre-check — a symlinked credential goes stale at the first token refresh,
+  not never, and `claude auth status` proves presence, not validity, of a
+  credential (`60f006a`)
+
+### Changed
+
+- `SensorLine.gateExhausted`'s doc comment now notes it reads `true` on an
+  `interrupted` line even when the rounds budget didn't run out — deliberate
+  schema parity with the frozen contract, not a bug (`97ae9b1`)
+- Filed `test/imports.test.ts`'s import scanner as `docs/known-issues.md` #9:
+  its regex isn't comment-aware, so prose in a doc comment can be misread as
+  an import and fail the suite on correct code. Recorded, not fixed
+  (`ac1b479`)
+- Version bumped to 0.4.2 across the four version sites
+
 ## [0.4.1] - 2026-08-05
 
 Review-debt paydown: the five findings the 0.4.0 pre-release review recorded
