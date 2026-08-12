@@ -176,6 +176,19 @@ export class FileStateStore implements StateStore {
    * alone rather than guessed at — that failure mode falls back to the
    * bounded acquire timeout in withLock, which is what actually keeps this
    * from wedging a session either way, not this staleness check.
+   *
+   * A second, related residual: pid reuse. If a holder crashes after
+   * writing this lockfile but before its own finally-release runs, the pid
+   * it wrote survives it. Should the OS later recycle that exact pid to
+   * any unrelated live process before this lock is next contended,
+   * isProcessAlive(pid) reports it alive and the lock is never reclaimed
+   * here either — the same bounded acquire timeout in withLock is what
+   * keeps that case from wedging too, at the cost of a full
+   * lockAcquireTimeoutMs stall per save() plus an orphaned lockfile until
+   * the recycled pid itself exits. Untestable by construction — a pid
+   * recycle cannot be forced deterministically — which is exactly why it
+   * is documented here and in docs/known-issues.md #8 rather than pinned
+   * by a test.
    */
   private reclaimIfStale(lockPath: string): void {
     try {

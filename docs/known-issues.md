@@ -241,8 +241,23 @@ handlers share one `gate` instance and can race the same way.
 Fixed: `onNewUserPrompt`'s reset now checks `persist()`'s return, and on a
 lost race reloads the current state and retries the reset once against the
 fresh `updatedAt`. Human preemption is unconditional intent — it wins by
-retrying, not by silently no-op'ing. One retry, not a loop; a second lost
-race is left alone, consistent with fail-open. Pinned by
+retrying, not by silently no-op'ing. One retry, not a loop: a second lost
+race — needing a *third* write to land in the brief window between the
+retry's own load and its persist — is left alone rather than chased
+further.
+
+**That residual is not a fail-open case, and an earlier draft of this entry
+mislabeled it as one.** Fail-open means this session's own turn is allowed
+through regardless, which was already true before this fix existed and
+isn't what's at stake here. What a second lost race actually leaves behind
+is this issue's own over-gating symptom, narrowed rather than eliminated: a
+later, unrelated cycle could still inherit a stale round count from
+whichever write won that second race, and exhaust on its first failing
+check with zero blocks of its own issued. Narrower by a wide margin than
+the defect this fix closes — it now takes three overlapping writers instead
+of two — but not zero, and not the same shape as fail-open. Corrected here
+rather than left mislabeled, because a wrong justification is how an
+accepted risk gets re-accepted later without re-examination. Pinned by
 `test/gate.test.ts`'s "a concurrent writer that lands a block first still
 loses to the human's reset, once retried" test — the mirror image of the
 existing one.
@@ -289,6 +304,24 @@ Regression tests (`test/runtime.test.ts`) cover a stale lock with a
 confirmed-dead pid being reclaimed, and — the case the defect was actually
 about — an old lock whose recorded holder is still alive NOT being reclaimed
 even past the staleness threshold.
+
+**A related residual, not previously documented here: pid reuse.** If a
+holder crashes after writing the lockfile but before its own
+`finally`-release runs, the lockfile is left stamped with that holder's
+pid. Should the OS later recycle that exact pid to any unrelated live
+process before this lock is next contended, `process.kill(pid, 0)` succeeds
+against the new process and the lock is never reclaimed by the liveness
+check either. This shares its fallback with the unparseable-pid case just
+above and cannot wedge for the same reason: the same bounded acquire
+timeout in `withLock` covers it too, degrading to the CAS-only unlocked
+path exactly as it would for any other unreclaimable lock. The cost is
+narrower than a wedge but real — whichever session hits it pays a full
+`lockAcquireTimeoutMs` stall on every `save()` against that lockfile, plus
+an orphaned lockfile that persists until the recycled pid itself exits.
+Untestable by construction — a pid recycle cannot be forced
+deterministically — which is exactly why it is documented here and at
+`reclaimIfStale`'s own comment in `file-state-store.ts` rather than pinned
+by a test.
 
 ## 9. `test/imports.test.ts`'s import scanner is a regex over raw text, not comment-aware — prose can be misread as an import
 
