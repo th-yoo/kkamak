@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createGate } from "../src/kernel/gate.ts"
+import { CHECK_CLAMP_MARGIN_MS, createGate } from "../src/kernel/gate.ts"
 import { INITIAL_STATE } from "../src/kernel/state.ts"
 import { FAIL, FakeClock, makeHarness, PASS } from "./fakes.ts"
 
@@ -727,6 +727,143 @@ describe("a skipped stop boundary is visible", () => {
     h.config.raw = undefined
     expect(await gate.handle(prompt)).toEqual({ kind: "allow" })
     expect(h.sensor.lines).toHaveLength(0)
+  })
+})
+
+// A4: Claude Code SIGKILLs the Stop hook at its manifest timeout, before the
+// gate can record anything — no state, no round, no notice. A checkTimeoutMs
+// at or above that ceiling therefore silently never gets its configured time.
+// When the host supplies its ceiling, the kernel clamps what it passes to the
+// runner and says so; a host with no killable ceiling (opencode) supplies
+// nothing and is never clamped.
+describe("checkTimeoutMs clamped under the stop-hook ceiling", () => {
+  const CEILING = 600_000
+  const withCeiling = { app: "test-app", host: "test-host", stopTimeoutMs: CEILING }
+
+  test("a timeout leaving no margin is clamped to ceiling minus margin", async () => {
+    const h = makeHarness({
+      raw: '{"check":"x","checkTimeoutMs":600000}',
+      script: [PASS],
+      info: withCeiling,
+    })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    expect(h.check.calls[0]?.timeoutMs).toBe(CEILING - CHECK_CLAMP_MARGIN_MS)
+  })
+
+  test("notes the exact numbers and how to fix the config", async () => {
+    const h = makeHarness({
+      raw: '{"check":"x","checkTimeoutMs":600000}',
+      script: [PASS],
+      info: withCeiling,
+    })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    const log = h.logger.messages.join("\n")
+    expect(log).toContain("600000")
+    expect(log).toContain(String(CEILING - CHECK_CLAMP_MARGIN_MS))
+    expect(log).toContain("gate.json")
+  })
+
+  test("a timeout at the boundary passes through untouched, silently", async () => {
+    const h = makeHarness({
+      raw: `{"check":"x","checkTimeoutMs":${CEILING - CHECK_CLAMP_MARGIN_MS}}`,
+      script: [PASS],
+      info: withCeiling,
+    })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    expect(h.check.calls[0]?.timeoutMs).toBe(CEILING - CHECK_CLAMP_MARGIN_MS)
+    expect(h.logger.messages).toEqual([])
+  })
+
+  test("a comfortable timeout passes through untouched", async () => {
+    const h = makeHarness({
+      raw: '{"check":"x","checkTimeoutMs":1234}',
+      script: [PASS],
+      info: withCeiling,
+    })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    expect(h.check.calls[0]?.timeoutMs).toBe(1234)
+  })
+
+  test("a host with no ceiling never clamps, however large the timeout", async () => {
+    const h = makeHarness({
+      raw: '{"check":"x","checkTimeoutMs":900000}',
+      script: [PASS],
+    })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    expect(h.check.calls[0]?.timeoutMs).toBe(900_000)
+    expect(h.logger.messages).toEqual([])
+  })
+
+  test("a ceiling smaller than the margin still passes a positive timeout", async () => {
+    const h = makeHarness({
+      raw: '{"check":"x","checkTimeoutMs":500}',
+      script: [PASS],
+      info: { app: "test-app", host: "test-host", stopTimeoutMs: 1_000 },
+    })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    expect(h.check.calls[0]?.timeoutMs).toBeGreaterThan(0)
+  })
+})
+
+// A2: every sensor line carries the budget it was measured against, so an
+// exhaustion-rate change can be attributed to agent behaviour vs a config
+// edit. rounds:3 everywhere below — a non-default value, so a default
+// leaking in from anywhere else cannot make these pass vacuously.
+describe("roundsMax on the sensor line", () => {
+  const RAW = '{"check":"bun test","rounds":3}'
+
+  test("a clean accept records the configured budget", async () => {
+    const h = makeHarness({ raw: RAW, script: [PASS] })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    expect(h.sensor.lines[0]).toMatchObject({ rounds: ["accepted"], roundsMax: 3 })
+  })
+
+  test("an exhausted cycle records the configured budget", async () => {
+    const h = makeHarness({ raw: RAW, fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    for (let i = 0; i < 4; i++) await gate.handle(stop)
+    expect(h.sensor.lines).toHaveLength(1)
+    expect(h.sensor.lines[0]).toMatchObject({ gateExhausted: true, roundsMax: 3 })
+  })
+
+  test("an interrupted cycle records the configured budget", async () => {
+    const h = makeHarness({ raw: RAW, fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    await gate.handle(prompt)
+    expect(h.sensor.lines[0]).toMatchObject({ interrupted: true, roundsMax: 3 })
+  })
+
+  test("a skipped-stop diagnostic records the configured budget", async () => {
+    const h = makeHarness({ raw: RAW, fallback: FAIL })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(prompt)
+    expect(h.sensor.lines[0]).toMatchObject({ skippedStop: true, roundsMax: 3 })
+  })
+
+  test("rounds:0 stamps a zero budget rather than dropping the field", async () => {
+    const h = makeHarness({ raw: '{"check":"x","rounds":0}', script: [FAIL] })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    expect(h.sensor.lines[0]?.roundsMax).toBe(0)
   })
 })
 

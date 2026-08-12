@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { buildSensorLine, KERNEL_VERSION, OPTIONAL_SENSOR_FIELDS, SENSOR_FIELDS } from "../src/kernel/sensor.ts"
+import {
+  buildSensorLine,
+  KERNEL_PRODUCT,
+  KERNEL_VERSION,
+  OPTIONAL_SENSOR_FIELDS,
+  SENSOR_FIELDS,
+} from "../src/kernel/sensor.ts"
 import type { HostInfo, SensorLine } from "../src/kernel/ports.ts"
 
 const info: HostInfo = { app: "opencode", host: "test-host" }
@@ -22,7 +28,7 @@ describe("buildSensorLine", () => {
     expect(Object.keys(line).sort()).toEqual([...SENSOR_FIELDS].sort())
   })
 
-  test("declares the twelve agreed fields", () => {
+  test("declares the thirteen agreed fields", () => {
     expect([...SENSOR_FIELDS].sort()).toEqual([
       "accepted",
       "app",
@@ -33,6 +39,7 @@ describe("buildSensorLine", () => {
       "interrupted",
       "marker",
       "pluginVersion",
+      "product",
       "rounds",
       "sessionID",
       "ts",
@@ -45,6 +52,18 @@ describe("buildSensorLine", () => {
   test("stamps pluginVersion from the kernel's own package version", () => {
     const line = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds] })
     expect(line.pluginVersion).toBe(KERNEL_VERSION)
+  })
+
+  // A3: pluginVersion alone cannot say which implementation wrote a line —
+  // a differently-sourced build can (and on this machine does) ship the
+  // same plugin name and overlapping versions into the same sensor file.
+  // The product stamp names this codebase unconditionally, and there is
+  // deliberately no config surface for it: gate.json must not be able to
+  // spoof it.
+  test("stamps the product identity unconditionally", () => {
+    const line = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds] })
+    expect(line.product).toBe(KERNEL_PRODUCT)
+    expect(KERNEL_PRODUCT.length).toBeGreaterThan(0)
   })
 
   // The consumer's frozen contract requires `marker` on every line — the
@@ -132,17 +151,42 @@ describe("buildSensorLine", () => {
 })
 
 describe("additive fields", () => {
-  test("declares the three optional fields", () => {
-    expect([...OPTIONAL_SENSOR_FIELDS].sort()).toEqual(["checkMs", "forced", "skippedStop"])
+  test("declares the four optional fields", () => {
+    expect([...OPTIONAL_SENSOR_FIELDS].sort()).toEqual([
+      "checkMs",
+      "forced",
+      "roundsMax",
+      "skippedStop",
+    ])
   })
 
   // Existing consumers must not have to learn a new field to keep working.
-  test("omits all three when not supplied, so an ordinary line is unchanged", () => {
+  test("omits all four when not supplied, so an ordinary line is unchanged", () => {
     const line = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds] })
     expect(Object.keys(line).sort()).toEqual([...SENSOR_FIELDS].sort())
     expect("checkMs" in line).toBe(false)
     expect("skippedStop" in line).toBe(false)
     expect("forced" in line).toBe(false)
+    expect("roundsMax" in line).toBe(false)
+  })
+
+  // A2: the budget the cycle was measured against. Without it, two windows
+  // with different `rounds` settings pool silently.
+  test("carries the rounds budget when supplied", () => {
+    const line = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds], roundsMax: 3 })
+    expect(line.roundsMax).toBe(3)
+  })
+
+  // rounds:0 is a real config (observe-only) — a truthiness check would drop it.
+  test("keeps a zero rounds budget, which observe-only configs use", () => {
+    const line = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds], roundsMax: 0 })
+    expect(line.roundsMax).toBe(0)
+  })
+
+  test("a roundsMax line survives a JSON round trip", () => {
+    const line = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds], roundsMax: 2 })
+    expect(JSON.parse(JSON.stringify(line))).toEqual(line)
+    expect(JSON.stringify(line)).not.toContain("\n")
   })
 
   test("carries per-round check times parallel to rounds", () => {

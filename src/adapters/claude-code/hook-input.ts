@@ -14,6 +14,16 @@ export const EDIT_TOOLS = ["Edit", "MultiEdit", "Write", "NotebookEdit"]
 
 export const HOOK_EVENTS = ["PostToolUse", "UserPromptSubmit", "Stop"] as const
 
+/**
+ * Claude Code's kill ceiling on the Stop hook, in ms: hooks/hooks.json sets
+ * `"timeout": 600` (seconds) on the Stop entry, after which the hook process
+ * is SIGKILLed. Reported to the kernel as `HostInfo.stopTimeoutMs` so it can
+ * clamp `checkTimeoutMs` under it. Tied to the manifest literal by
+ * test/packaging.test.ts so the two cannot drift. Defined here rather than
+ * in hook-cli.ts because importing hook-cli runs its main().
+ */
+export const STOP_HOOK_TIMEOUT_MS = 600_000
+
 export interface ParsedHookInput {
   event: GateEvent
   root: string

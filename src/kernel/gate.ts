@@ -24,6 +24,21 @@ import type {
 export const ERROR_STREAK_LIMIT = 3
 
 /**
+ * Safety margin held back from a host-supplied kill ceiling
+ * (`HostInfo.stopTimeoutMs`) when clamping `checkTimeoutMs`: everything the
+ * ceiling covers besides the check itself must fit inside it, or the host
+ * SIGKILLs the hook before the gate records anything.
+ *
+ * Basis: measured 2026-08-12 (WSL2 dev machine, 15 end-to-end Claude Code
+ * hook-cli Stop runs with a trivial check), worst-case non-check overhead —
+ * bun startup, stdin read, config/state load, state write, sensor append,
+ * decision emit — was 78.8ms. The ~60x headroom on top of that is a declared
+ * guess, not a measurement: it buys room for system load, cold caches and
+ * slow filesystems, and costs under 1% of a 600s ceiling.
+ */
+export const CHECK_CLAMP_MARGIN_MS = 5_000
+
+/**
  * Advisory hygiene countermand, returned on `GateDecision.marker` when
  * `GateConfig.marker` is on and a cycle just cleanly accepted. Mirrors the
  * intent of the frozen contract's own hygiene marker (meta-harness
@@ -123,6 +138,7 @@ function onNewUserPrompt(
         checkMs: [],
         durationMs: 0,
         marker: false,
+        roundsMax: config.rounds,
       })
     }
     return ALLOW
@@ -139,6 +155,7 @@ function onNewUserPrompt(
       checkMs: state.checkMs,
       durationMs: elapsed(host, state.cycleStartedAt),
       marker: false,
+      roundsMax: config.rounds,
     })
   }
 
@@ -182,10 +199,30 @@ async function onStopRequested(
 
   const startedAt = state.gating ? state.cycleStartedAt : host.clock.now()
 
+  // A4: a checkTimeoutMs leaving no margin under the host's kill ceiling
+  // means the host SIGKILLs this whole process before the gate can record
+  // anything — no state, no round, no notice. Clamp what the runner gets and
+  // say so. A host that reports no ceiling (opencode's session.idle has no
+  // killable timeout) passes through untouched.
+  let checkTimeoutMs = config.checkTimeoutMs
+  const ceiling = host.info.stopTimeoutMs
+  if (ceiling !== undefined && checkTimeoutMs > ceiling - CHECK_CLAMP_MARGIN_MS) {
+    const clamped = Math.max(1, ceiling - CHECK_CLAMP_MARGIN_MS)
+    if (clamped < checkTimeoutMs) {
+      note(
+        host,
+        `checkTimeoutMs ${checkTimeoutMs} leaves no margin under the host's` +
+          ` ${ceiling}ms stop ceiling — running the check with ${clamped}ms instead;` +
+          ` set checkTimeoutMs to at most ${clamped} in gate.json`,
+      )
+      checkTimeoutMs = clamped
+    }
+  }
+
   const checkStartedAt = host.clock.now()
   let result: CheckResult
   try {
-    result = await host.check.run(config.check, config.checkTimeoutMs)
+    result = await host.check.run(config.check, checkTimeoutMs)
     if (typeof result?.code !== "number") {
       throw new Error(`check runner returned a malformed result: ${JSON.stringify(result)}`)
     }
@@ -212,6 +249,7 @@ async function onStopRequested(
       checkMs,
       durationMs: elapsed(host, startedAt),
       marker: config.marker,
+      roundsMax: config.rounds,
     })
     persist(host, sessionID, { ...INITIAL_STATE }, state.updatedAt)
     return config.marker ? { kind: "allow", marker: HYGIENE_MARKER } : ALLOW
@@ -264,6 +302,7 @@ async function onStopRequested(
     // Marker must never fire on exhaustion, even with config.marker on —
     // see GateConfig.marker's doc comment.
     marker: false,
+    roundsMax: config.rounds,
   })
   persist(host, sessionID, { ...INITIAL_STATE }, state.updatedAt)
   return {

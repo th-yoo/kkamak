@@ -35,7 +35,7 @@ import { describe, expect, test } from "bun:test"
 import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 import { createGate } from "../src/kernel/gate.ts"
-import { KERNEL_VERSION } from "../src/kernel/sensor.ts"
+import { KERNEL_PRODUCT, KERNEL_VERSION } from "../src/kernel/sensor.ts"
 import type { RoundOutcome } from "../src/kernel/ports.ts"
 import { FAIL, FakeClock, makeHarness, PASS } from "./fakes.ts"
 
@@ -127,6 +127,16 @@ function assertConformsToSensorContract(line: Record<string, unknown>): void {
   if ("forced" in line) {
     expect(typeof line.forced).toBe("boolean")
   }
+
+  // A2/A3 extension fields, following the pluginVersion precedent: the
+  // contract tolerates unknown fields in both directions (verified — neither
+  // this file nor the meta-harness counterpart bans field names it does not
+  // enumerate; the fixture lines themselves carry `reinject`, which this
+  // kernel never emits). Both are always stamped by this kernel,
+  // contract-tolerated-absent from other producers.
+  expect(typeof line.product).toBe("string")
+  expect(line.product).toBe(KERNEL_PRODUCT)
+  expect(typeof line.roundsMax).toBe("number")
 }
 
 describe("sensor contract: driven-kernel emission conforms to the frozen SensorLine", () => {
