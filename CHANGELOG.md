@@ -11,6 +11,7 @@ Two sensor fields that make a stream readable without an operator's memory,
 and a clamp that stops a misconfigured `checkTimeoutMs` from losing a cycle
 silently. No breaking changes: both fields are additive and the frozen
 consumer contract tolerates their absence, so existing readers are unaffected.
+Full narrative in [dogfood log](docs/dogfood-log.md#2026-08-12--050-two-sensor-fields-a-timeout-clamp-and-what-verification-order-buys-yoo-dev).
 
 ### Added
 

@@ -49,6 +49,72 @@ the day's sensor numbers, and mechanism observations the sensor stream
 cannot see (behavioral shifts, qualitative saves, instrument anomalies).
 This file is proposer evidence — keep entries factual and dated.
 
+## 2026-08-12 — 0.5.0: two sensor fields, a timeout clamp, and what verification order buys (yoo-dev)
+
+**What shipped.** `product` and `roundsMax` on the sensor line, plus a clamp
+that keeps a misconfigured `checkTimeoutMs` from destroying a cycle. Merged
+`1cdaebf`, tagged `v0.5.0` on that exact commit; suite 331 → 351 tests, all
+green, typecheck clean.
+
+**Why `product` exists, from a live collision.** This machine had the private
+research build registered as a marketplace named `kkamak-local`, whose
+`plugin.json` declares `"name": "kkamak"` and whose cache held 0.2.1 / 0.3.0 /
+0.4.0 — overlapping the public plugin's own 0.4.0 and 0.4.1, both resolving
+their sensor path from the same hook-payload `cwd`. So `pluginVersion` could
+not say which implementation wrote a line; the 13-cycle dogfood resolved that
+by single-emitter isolation alone. `product` is stamped as a literal, pinned
+to `package.json`'s `name`, and deliberately absent from `gate.json` — a
+spoofable identity field would be worse than none. It labels future lines
+only; the 71 lines already in this repo's stream stay unattributable.
+
+**Why `roundsMax` exists.** The budget a cycle was measured against existed on
+the block decision and reached the user through the block message, but never
+reached the record. Two windows configured with different `rounds` pooled
+silently, and a change in exhaustion rate could not be told apart from a
+config edit.
+
+**The clamp, and the honest half of it.** A `checkTimeoutMs` at or above the
+Stop hook's own 600s ceiling previously got the hook process killed mid-check:
+no state, no round consumed, no line — indistinguishable from a gate that never
+ran. It is now clamped to fit. The margin is split honestly: a measured base
+(worst-case 78.8ms of non-check overhead across 15 end-to-end hook runs) and a
+declared judgement for the headroom above it, documented as a guess at
+`CHECK_CLAMP_MARGIN_MS` rather than presented as derived.
+
+**What verification order bought — the finding of the session.** 0.5.0 was
+verified twice. The pre-merge pass could not use a GitHub clone, because
+`marketplace add` clones the default branch and 0.5.0 was not yet on it — a
+real clone would have verified 0.4.2 and called it 0.5.0. So the tree was
+installed from a directory-source marketplace instead. **That pass is what
+found `known-issues` #10:** the clamp fires correctly, but its message goes to
+hook stderr, which Claude Code does not surface — measured both ways, absent
+from a real `claude -p` session, present when driving the same installed
+hook-cli directly. The CHANGELOG and README had already been written claiming
+the gate "says so". Literally true, practically false. Both were corrected
+before merge, and the clamp now ships documented as silent protection.
+
+The post-merge pass then ran the full runbook against the real clone and
+passed every assertion: one `/0.5.0/` cache directory, a live block ending in
+exhaustion, sensor line reading `gateExhausted: true`, two `verify-failed`
+rounds, `pluginVersion 0.5.0`, `product "kkamak"`, `roundsMax 1`.
+
+**Two runbook defects, found by executing it.** The isolated `CLAUDE_CONFIG_DIR`
+must not sit on a Windows mount — DrvFS carries no permission bits, so
+`install -m 600` silently fails and the seeded credential is left unprotected.
+And the step-3 turn needs room to finish: under a seconds-scale command timeout
+it was killed mid-turn and left no sensor line, which reads as a gate that
+never armed rather than a run that was cut short. The second one recurred while
+committing its own fix.
+
+**Gate scoreboard for this session: 2 cycles, 0 blocks, 0 defects caught.**
+Both clean accepts. One of those green lines belongs to a build session that
+was permission-blocked and produced nothing but a scratch probe file — the gate
+ran the suite, passed, and recorded a healthy cycle for a session with no work
+in it. Every substantive correction this session came from executing a
+procedure or reviewing output; the suite going 331 → 351 green caught none of
+them. Consistent with the 2026-08-11 entry below, and worth restating: a green
+check is breakage detection, never coverage.
+
 ## 2026-08-11 — FIRST SENSOR LINE PRODUCED BY THE PUBLIC PLUGIN (yoo-dev)
 
 **Read the scope line first.** Every sensor number in every entry below this
