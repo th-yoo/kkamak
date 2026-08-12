@@ -307,6 +307,51 @@ block-then-accept instances, all at `0.2.0`, none yet on this kernel.
 a tracked file. It will arm the session, and its own stop will resolve into
 an eighth cycle — one this section is written before and so cannot report.
 
+**CORRECTION, next day.** Observation C above is wrong. It is left standing
+rather than edited away, because the error is itself the finding.
+
+Cycle 9, `ts 1786494056836`, recorded `rounds: ["verify-failed","accepted"]`,
+`checkMs: [3424, 3383]`, `durationMs: 86198` — roughly 7s of checking against
+~79s of the model working under the block. It is the first block-then-accept
+this entry has recorded on the rewritten kernel, and it was not
+manufactured: no task was re-run to chase one. It arose from the fix for two
+defects a second independent architect review found in the concurrency
+commits (`docs/known-issues.md` #8).
+
+**Record precisely what the gate actually caught, because it is not what it
+looks like.** The failing check was not a defect in that fix. It was a false
+positive in this repo's own `test/imports.test.ts`: its import scanner is a
+regex over raw source text, not comment-aware, and it matched prose inside a
+doc comment — the words `from "old and merely` … `slow"`, spanning two
+comment lines — as if they were an import statement.
+
+So the honest scoreboard across all nine cycles in this entry: **zero real
+defects caught by the gate, one false positive.** Both genuine defects in
+this work — the original `FileStateStore` race, and the unguarded
+reverse-ordering in the first fix for it — were found by independent
+review, each time *after* the gate had already accepted the code with a
+fully green suite. State it plainly rather than let the count flatter the
+instrument: the gate evidences that nothing already pinned broke; review is
+what finds what was got wrong. Observation A earlier in this section already
+reached this conclusion in the abstract; this cycle is that conclusion's
+first concrete instance in this entry's own stream.
+
+**The uncomfortable part.** The false positive was resolved by rewording the
+comment, not by fixing the scanner that misreads prose as an import. That is
+gate-avoidance pressure in the same shape the 2026-08-07 entry below
+documents on `cc-api-daemon` — the cheapest way to go green is not always
+the correct fix — except this instance was produced by the operator under
+the very gate being measured here, and would have gone unnoticed had the
+commit body not said so plainly. The scanner defect remains **unfiled and
+unfixed** — only the comment moved. The scanner was already known-limited:
+the 0.4.0 pre-release review's finding 2 flagged that "the import scan
+cannot prove itself" (`docs/superpowers/plans/
+2026-07-30-kernel-review-remediation.md:361`) — that finding was about
+under-detection, a regex missing a real violation, and today's failure runs
+the other way, a regex mistaking prose for one — but both are the same root
+cause: a text regex standing in for a real import-graph analysis, with
+neither its precision nor its recall ever fully proven.
+
 ## 2026-08-07 — FIRST NON-kkamak SUBJECT REPO: gate armed on `cc-api-daemon` (yoo-dev)
 
 **Read the scope line first.** Every other entry in this file is kkamak
