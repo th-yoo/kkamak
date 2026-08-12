@@ -123,8 +123,11 @@ function accumulateTouchedPath(
  * under-gates the *telemetry* rather than over-blocking anything — the
  * classifier never gates a decision (see `classify.ts`), so a dropped path
  * costs a possibly-wrong `implOnly`/`sameTurnCoEdit` field, never a wedged
- * turn. Losing it against a concurrent reset still just leaves the gate
- * disarmed, same as before.
+ * turn. Losing it against a concurrent reset still just drops this one
+ * edit's own arming/path write — the reset itself already committed
+ * (`resetWithRetry` covers *its* side of that race), so the session ends up
+ * correctly unarmed for a cycle that is, from the reset's point of view,
+ * genuinely over.
  */
 function onFileEdited(
   host: GateHost,
@@ -143,6 +146,31 @@ function onFileEdited(
     state.updatedAt,
   )
   return ALLOW
+}
+
+/**
+ * Commit an unconditional full reset (`{...INITIAL_STATE, ...patch}`),
+ * retrying once against fresh state if the first attempt loses its
+ * compare-and-swap. A reset represents unconditional intent — the cycle is
+ * over, full stop — so silently no-op'ing on a lost race would leave
+ * `gating`/`round` stuck at whatever a concurrent writer left, for an
+ * unrelated later cycle to inherit: the "round already at budget, first
+ * failing check exhausts with zero blocks issued" symptom
+ * `docs/known-issues.md` #8 describes. One retry, not a loop — fail-open
+ * still governs, so a second lost race (a third writer landing in the
+ * narrow gap between the retry's own load and its persist) is left alone
+ * rather than chased further, same as every other retry in this file.
+ */
+function resetWithRetry(
+  host: GateHost,
+  sessionID: string,
+  state: GateState,
+  patch: Partial<GateState> = {},
+): void {
+  if (!persist(host, sessionID, { ...INITIAL_STATE, ...patch }, state.updatedAt)) {
+    const fresh = host.state.load(sessionID)
+    persist(host, sessionID, { ...INITIAL_STATE, ...patch }, fresh.updatedAt)
+  }
 }
 
 /**
@@ -230,21 +258,12 @@ function onNewUserPrompt(
   }
 
   // Human preemption is unconditional intent: a new prompt means this cycle
-  // is over, full stop, whatever else raced against it. If the reset's own
-  // compare-and-swap loses — a concurrent stop-requested handler (a second
-  // process, or opencode's session.idle callback sharing this gate instance
-  // with chat.message) landed a block first, based on the same pre-prompt
-  // read — reload and retry once against whatever is actually on disk now.
-  // Silently giving up here would leave that block's round count behind for
-  // an unrelated later cycle to inherit: the exact "round already at budget,
-  // first failing check exhausts with zero blocks issued" symptom
-  // docs/known-issues.md #8 describes, reachable through this path too. One
-  // retry, not a loop — fail-open still governs, so a second lost race is
-  // left alone rather than chased further.
-  if (!persist(host, sessionID, { ...INITIAL_STATE }, state.updatedAt)) {
-    const fresh = host.state.load(sessionID)
-    persist(host, sessionID, { ...INITIAL_STATE }, fresh.updatedAt)
-  }
+  // is over, full stop, whatever else raced against it. A concurrent
+  // stop-requested handler (a second process, or opencode's session.idle
+  // callback sharing this gate instance with chat.message) may have landed a
+  // block first, based on the same pre-prompt read — resetWithRetry covers
+  // that race, see its own doc comment.
+  resetWithRetry(host, sessionID, state)
   return ALLOW
 }
 
@@ -322,7 +341,10 @@ async function onStopRequested(
       roundsMax: config.rounds,
       ...cycleTags(state.touchedPaths, state.touchedTruncated, config.testPathPattern),
     })
-    persist(host, sessionID, { ...INITIAL_STATE }, state.updatedAt)
+    // A concurrent file-edited write (A1 persists far more often across a
+    // cycle than before) or another handler can land here first; see
+    // resetWithRetry's doc comment for why this is not a bare persist().
+    resetWithRetry(host, sessionID, state)
     return config.marker ? { kind: "allow", marker: HYGIENE_MARKER } : ALLOW
   }
 
@@ -376,7 +398,8 @@ async function onStopRequested(
     roundsMax: config.rounds,
     ...cycleTags(state.touchedPaths, state.touchedTruncated, config.testPathPattern),
   })
-  persist(host, sessionID, { ...INITIAL_STATE }, state.updatedAt)
+  // See resetWithRetry's doc comment: same race as the accept-path reset above.
+  resetWithRetry(host, sessionID, state)
   return {
     kind: "allow",
     notice:
@@ -401,14 +424,12 @@ function onInternalError(
   const errorStreak = state.errorStreak + 1
 
   if (errorStreak >= ERROR_STREAK_LIMIT) {
-    // Not audited to the same depth as the two persists below (out of scope
-    // for the docs/known-issues.md #8 review that covered them) but noted
-    // here since it is the same shape: a lost compare-and-swap on this
-    // INITIAL_STATE-spread reset leaves the session at whatever a
-    // concurrent writer left instead of disarmed, deferring the safety net
-    // by one more internal error rather than dropping it — worth a retry
-    // like onNewUserPrompt's if this gets a closer look, not fixed here.
-    persist(host, sessionID, { ...INITIAL_STATE, errorStreak, disarmed: true }, state.updatedAt)
+    // Same "unconditional intent" shape as onNewUserPrompt's and
+    // onStopRequested's resets: disarming is terminal for this session, so a
+    // lost compare-and-swap must retry rather than leave the session at
+    // whatever a concurrent writer left instead of disarmed. See
+    // resetWithRetry's doc comment.
+    resetWithRetry(host, sessionID, state, { errorStreak, disarmed: true })
     return {
       kind: "allow",
       notice:

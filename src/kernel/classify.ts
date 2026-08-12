@@ -14,18 +14,24 @@
 
 /**
  * Default pattern, matched case-insensitively against the whole path with
- * backslashes normalised to `/`. Two alternatives:
+ * backslashes normalised to `/`. Three alternatives:
  *
  * - a path segment that IS a test directory by convention: `test`, `tests`,
  *   `spec`, `specs`, `__tests__` — segment-exact, so `contest/` or
  *   `testimony/` do not match;
+ * - a bare filename whose stem, with any extension, IS one of those same
+ *   words: `test.ts`, `src/spec.py` — same segment-exactness, so `latest.ts`
+ *   or `src/testimony/x.ts` do not match; distinct from the directory
+ *   alternative above because a directory segment has no extension to allow;
  * - a filename whose extension is preceded by a `.`/`_`/`-`-separated
  *   `test`/`spec` marker: `foo.test.ts`, `Button.spec.tsx`, `store_test.go`,
  *   `parser-test.js` — separator-anchored, so `latest.ts` or
  *   `attestation.ts` do not match.
  */
 export const DEFAULT_TEST_PATH_PATTERN =
-  "(^|/)(tests?|specs?|__tests__)(/|$)|[._-](test|spec)s?\\.[^/]*$"
+  "(^|/)(tests?|specs?|__tests__)(/|$)" +
+  "|(^|/)(tests?|specs?|__tests__)\\.[^/]*$" +
+  "|[._-](test|spec)s?\\.[^/]*$"
 
 /**
  * Whether `path` looks like a test file under `pattern` (a regex source

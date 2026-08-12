@@ -17,6 +17,10 @@ describe("isTestPath with the default pattern", () => {
     "pkg/store_test.go",
     "lib/parser-test.js",
     "deep/nested/test/fixture-loader.ts",
+    "test.ts",
+    "spec.js",
+    "src/test.ts",
+    "src/kernel/spec.py",
   ])("classifies %s as a test path", (path) => {
     expect(isTestPath(path, DEFAULT_TEST_PATH_PATTERN)).toBe(true)
   })

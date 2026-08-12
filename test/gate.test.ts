@@ -374,6 +374,27 @@ describe("internal errors disarm rather than wedge", () => {
     expect(h.store.peek(SESSION)?.disarmed).toBe(true)
   })
 
+  // Same shape as the two onStopRequested-reset races above: this disarm
+  // reset was explicitly flagged in gate.ts's own comment as an unretried
+  // gap ("worth a retry ... if this gets a closer look, not fixed here") —
+  // now that resetWithRetry exists for the other two, applying it here too.
+  test("the disarm reset retries after losing a CAS race, rather than leaving stale state behind", async () => {
+    const h = makeHarness({ fallback: new Error("spawn ENOENT") })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+    await gate.handle(stop)
+    await gate.handle(stop)
+
+    h.check.onRun = () => {
+      const loaded = h.store.load(SESSION)
+      h.store.save(SESSION, { ...loaded, touchedPaths: ["src/concurrent.ts"] }, loaded.updatedAt)
+    }
+
+    const third = await gate.handle(stop)
+    expect(third.kind).toBe("allow")
+    expect(h.store.peek(SESSION)).toMatchObject({ disarmed: true, errorStreak: 3 })
+  })
+
   test("a disarmed session stays disarmed even after further edits", async () => {
     const h = makeHarness({ fallback: new Error("boom") })
     const gate = createGate(h.host)
@@ -527,6 +548,56 @@ describe("fail-open: no port failure may wedge a session", () => {
     // the reset, so a later unrelated cycle does not inherit round:2 and
     // exhaust on its first failure with zero blocks of its own issued.
     expect(h.store.peek(SESSION)).toMatchObject({ gating: false, round: 0 })
+  })
+
+  // A1 widened this window: onFileEdited now persists on every new distinct
+  // touched path across the whole cycle (previously it wrote once, at the
+  // first edit, then went silent) — so a concurrent file-edited write can
+  // now land during onStopRequested's `await host.check.run(...)`, exactly
+  // where onNewUserPrompt's reset was already known to race (see the pair of
+  // tests above). Unlike that reset, onStopRequested's own accept/exhaust
+  // resets never checked persist()'s return at all before this fix — not
+  // even audited as "left as-is", just missed. Same headline symptom if
+  // unfixed: a later, unrelated cycle inherits stale gating/round state and
+  // exhausts on its first failure with zero blocks of its own issued.
+  test("the accept-path reset retries after losing a CAS race, rather than leaving stale state behind", async () => {
+    const h = makeHarness({ raw: '{"check":"bun test","rounds":2}', script: [PASS] })
+    const gate = createGate(h.host)
+
+    // A cycle already has one block issued: gating:true, round:1.
+    h.store.save(
+      SESSION,
+      { ...INITIAL_STATE, edited: true, gating: true, round: 1, outcomes: ["verify-failed"], cycleStartedAt: 500 },
+      0,
+    )
+
+    // A concurrent writer (e.g. a racing file-edited handler) commits against
+    // the same pre-check snapshot while the check is in flight.
+    h.check.onRun = () => {
+      const loaded = h.store.load(SESSION)
+      h.store.save(SESSION, { ...loaded, touchedPaths: ["src/concurrent.ts"] }, loaded.updatedAt)
+    }
+
+    expect(await gate.handle(stop)).toEqual({ kind: "allow" })
+
+    // The reset must still land: a lost race here must not leave gating/round
+    // stuck for the next, unrelated cycle to inherit.
+    expect(h.store.peek(SESSION)).toMatchObject({ gating: false, round: 0, edited: false })
+  })
+
+  test("the exhausted-cycle reset retries after losing a CAS race, rather than leaving stale state behind", async () => {
+    const h = makeHarness({ raw: '{"check":"bun test","rounds":0}', fallback: FAIL })
+    const gate = createGate(h.host)
+    h.store.save(SESSION, { ...INITIAL_STATE, edited: true }, 0)
+
+    h.check.onRun = () => {
+      const loaded = h.store.load(SESSION)
+      h.store.save(SESSION, { ...loaded, touchedPaths: ["src/concurrent.ts"] }, loaded.updatedAt)
+    }
+
+    const decision = await gate.handle(stop)
+    expect(decision.kind).toBe("allow")
+    expect(h.store.peek(SESSION)).toMatchObject({ gating: false, round: 0, edited: false })
   })
 
   test("a throwing sensor sink does not change the decision", async () => {
