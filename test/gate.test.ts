@@ -450,14 +450,83 @@ describe("fail-open: no port failure may wedge a session", () => {
     const realSave = h.store.save.bind(h.store)
     h.host.state = {
       load: (id) => h.store.load(id),
-      save: (id, s) => {
-        realSave(id, s)
+      save: (id, s, expected) => {
+        realSave(id, s, expected)
         throw new Error("ENOSPC")
       },
     }
     const gate = createGate(h.host)
     await gate.handle(edit)
     expect(await gate.handle(stop)).toMatchObject({ kind: "allow" })
+  })
+
+  // docs/known-issues.md #8: a check can run for minutes, and nothing held
+  // the state file locked while it did. `onRun` fires mid-`host.check.run`,
+  // exactly where a second writer — another process, or opencode's second
+  // concurrent callback — would land a real write between this handler's own
+  // `load()` and its later `persist()`. The stale writer must lose the race,
+  // and losing it must still fail open rather than wedge the turn.
+  test("a concurrent writer during a slow check wins the race, and the stale write still fails open", async () => {
+    const h = makeHarness({ raw: '{"check":"bun test","rounds":2}', script: [FAIL] })
+    const gate = createGate(h.host)
+    await gate.handle(edit)
+
+    h.check.onRun = () => {
+      const loaded = h.store.load(SESSION)
+      h.store.save(SESSION, { ...loaded, disarmed: true }, loaded.updatedAt)
+    }
+
+    const decision = await gate.handle(stop)
+    expect(decision.kind).toBe("allow")
+    // The concurrent writer's state survived; this handler's own,
+    // now-stale block was refused rather than clobbering it.
+    expect(h.store.peek(SESSION)?.disarmed).toBe(true)
+    expect(h.store.peek(SESSION)?.gating).toBe(false)
+  })
+
+  // docs/known-issues.md #8, in reverse. Same race as the test above, other
+  // direction: a concurrent stop-requested handler is the FAST one this
+  // time, landing its own block before onNewUserPrompt's reset — reachable
+  // in one process via opencode's chat.message and session.idle sharing one
+  // gate instance. Human preemption is unconditional intent, so a lost
+  // compare-and-swap here must retry against the fresh state rather than
+  // silently leave that block's round count behind for an unrelated later
+  // cycle to inherit (the "round already at budget, first failure exhausts
+  // with zero blocks issued" symptom the doc describes).
+  test("a concurrent writer that lands a block first still loses to the human's reset, once retried", async () => {
+    const h = makeHarness({ raw: '{"check":"bun test","rounds":2}' })
+    const gate = createGate(h.host)
+
+    // A cycle already has one block issued: gating:true, round:1.
+    h.store.save(SESSION, { ...INITIAL_STATE, gating: true, round: 1, outcomes: ["verify-failed"], cycleStartedAt: 500 }, 0)
+
+    // Both a stop-requested and this new-user-prompt load that same state.
+    // The stop-requested handler is the fast one and lands its own block —
+    // round:2 — before this handler's own load-based reset attempt runs.
+    let raced = false
+    const realLoad = h.store.load.bind(h.store)
+    h.host.state = {
+      load: (id) => {
+        const snapshot = realLoad(id)
+        if (!raced) {
+          raced = true
+          h.store.save(id, { ...snapshot, round: 2, outcomes: [...snapshot.outcomes, "verify-failed"] }, snapshot.updatedAt)
+        }
+        return snapshot
+      },
+      save: (id, s, expected) => h.store.save(id, s, expected),
+    }
+
+    expect(await gate.handle(prompt)).toEqual({ kind: "allow" })
+
+    // The sensor line reflects what this handler saw (the pre-race cycle).
+    expect(h.sensor.lines).toHaveLength(1)
+    expect(h.sensor.lines[0]).toMatchObject({ interrupted: true, gateExhausted: true, rounds: ["verify-failed"] })
+
+    // Human preemption still wins: the retry against the fresh state landed
+    // the reset, so a later unrelated cycle does not inherit round:2 and
+    // exhaust on its first failure with zero blocks of its own issued.
+    expect(h.store.peek(SESSION)).toMatchObject({ gating: false, round: 0 })
   })
 
   test("a throwing sensor sink does not change the decision", async () => {
@@ -548,7 +617,7 @@ describe("a block that cannot be recorded is not a block", () => {
   /** Arms the session durably, then makes every subsequent save fail. */
   function armedThenReadOnly() {
     const h = makeHarness({ fallback: FAIL })
-    h.store.save(SESSION, { ...INITIAL_STATE, edited: true })
+    h.store.save(SESSION, { ...INITIAL_STATE, edited: true }, 0)
     h.host.state = {
       load: (id) => h.store.load(id),
       save: () => {

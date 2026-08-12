@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
+import { spawnSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -120,7 +121,7 @@ describe("FileStateStore", () => {
   test("round-trips a saved state", () => {
     const s = store()
     const saved: GateState = { ...INITIAL_STATE, edited: true, gating: true, round: 2, outcomes: ["verify-failed", "verify-failed"] }
-    s.save("sess-1", saved)
+    s.save("sess-1", saved, 0)
     expect(s.load("sess-1")).toMatchObject({
       edited: true,
       gating: true,
@@ -131,13 +132,13 @@ describe("FileStateStore", () => {
 
   test("stamps updatedAt on save", () => {
     const s = store()
-    s.save("sess-1", { ...INITIAL_STATE, edited: true })
+    s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
     expect(s.load("sess-1").updatedAt).toBeGreaterThan(0)
   })
 
   test("keeps sessions apart", () => {
     const s = store()
-    s.save("a", { ...INITIAL_STATE, edited: true })
+    s.save("a", { ...INITIAL_STATE, edited: true }, 0)
     expect(s.load("b")).toEqual(INITIAL_STATE)
   })
 
@@ -149,7 +150,7 @@ describe("FileStateStore", () => {
     ["an empty file", ""],
   ])("reads initial state when the record is %s", (_label, contents) => {
     const s = store()
-    s.save("sess-1", { ...INITIAL_STATE, edited: true })
+    s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
     const file = fs.readdirSync(path.join(dir, ".km", "gate")).find((f) => f.endsWith(".json"))!
     fs.writeFileSync(path.join(dir, ".km", "gate", file), contents)
     expect(s.load("sess-1")).toEqual(INITIAL_STATE)
@@ -158,28 +159,29 @@ describe("FileStateStore", () => {
   // Absent means initial, so saving initial state should not litter the dir.
   test("deletes the record when state returns to initial", () => {
     const s = store()
-    s.save("sess-1", { ...INITIAL_STATE, edited: true })
+    s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
     expect(fs.readdirSync(path.join(dir, ".km", "gate"))).not.toBeEmpty()
-    s.save("sess-1", { ...INITIAL_STATE })
+    const armed = s.load("sess-1")
+    s.save("sess-1", { ...INITIAL_STATE }, armed.updatedAt)
     expect(fs.readdirSync(path.join(dir, ".km", "gate")).filter((f) => f.endsWith(".json"))).toBeEmpty()
   })
 
   test("persists a disarmed session, which is not initial-equivalent", () => {
     const s = store()
-    s.save("sess-1", { ...INITIAL_STATE, disarmed: true, errorStreak: 3 })
+    s.save("sess-1", { ...INITIAL_STATE, disarmed: true, errorStreak: 3 }, 0)
     expect(s.load("sess-1").disarmed).toBe(true)
   })
 
   test("leaves no temp files behind after a save", () => {
     const s = store()
-    s.save("sess-1", { ...INITIAL_STATE, edited: true })
+    s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
     expect(fs.readdirSync(path.join(dir, ".km", "gate")).filter((f) => f.endsWith(".tmp"))).toBeEmpty()
   })
 
   // A harness-supplied session id is untrusted input.
   test("cannot be talked into escaping its directory", () => {
     const s = store()
-    s.save("../../escaped", { ...INITIAL_STATE, edited: true })
+    s.save("../../escaped", { ...INITIAL_STATE, edited: true }, 0)
     expect(fs.existsSync(path.join(dir, "escaped.json"))).toBe(false)
     expect(s.load("../../escaped").edited).toBe(true)
     const entries = fs.readdirSync(path.join(dir, ".km", "gate"))
@@ -189,16 +191,195 @@ describe("FileStateStore", () => {
 
   test("does not confuse two ids that sanitise alike", () => {
     const s = store()
-    s.save("a/b", { ...INITIAL_STATE, edited: true, round: 1 })
-    s.save("a:b", { ...INITIAL_STATE, edited: true, round: 2 })
+    s.save("a/b", { ...INITIAL_STATE, edited: true, round: 1 }, 0)
+    s.save("a:b", { ...INITIAL_STATE, edited: true, round: 2 }, 0)
     expect(s.load("a/b").round).toBe(1)
     expect(s.load("a:b").round).toBe(2)
   })
 
   test("round times survive a save/load round trip", () => {
     const store = new FileStateStore(dir)
-    store.save("s", { ...INITIAL_STATE, edited: true, gating: true, round: 1, outcomes: ["verify-failed"], checkMs: [1_234] })
+    store.save("s", { ...INITIAL_STATE, edited: true, gating: true, round: 1, outcomes: ["verify-failed"], checkMs: [1_234] }, 0)
     expect(store.load("s").checkMs).toEqual([1_234])
+  })
+
+  describe("optimistic concurrency (docs/known-issues.md #8)", () => {
+    test("refuses a stale write and the newer write survives — the race this fixes", () => {
+      const s = store()
+      s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
+      // "Writer A" loads here and is about to sit on a long check.
+      const loadedByA = s.load("sess-1")
+
+      // "Writer B" — a second process, or opencode's second concurrent
+      // callback — loads the same record and, unlike A, saves quickly.
+      const loadedByB = s.load("sess-1")
+      s.save(
+        "sess-1",
+        { ...loadedByB, gating: true, round: 1, outcomes: ["verify-failed"] },
+        loadedByB.updatedAt,
+      )
+      const afterB = s.load("sess-1")
+
+      // A's check finally finishes. Its save is computed from `loadedByA`,
+      // now stale — it must be refused, not silently clobber B's write.
+      expect(() => s.save("sess-1", { ...loadedByA, disarmed: true }, loadedByA.updatedAt)).toThrow()
+
+      // B's state is exactly what's still on disk.
+      expect(s.load("sess-1")).toEqual(afterB)
+      expect(s.load("sess-1").disarmed).toBe(false)
+    })
+
+    test("a save whose expected version matches the current record succeeds", () => {
+      const s = store()
+      s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
+      const loaded = s.load("sess-1")
+      s.save("sess-1", { ...loaded, gating: true, round: 1 }, loaded.updatedAt)
+      expect(s.load("sess-1")).toMatchObject({ gating: true, round: 1 })
+    })
+
+    // Awkward case 1: the record is absent entirely. `0` is the sentinel for
+    // "nothing was here at load time" — two writers racing to create the
+    // same session's first record must not both succeed.
+    test("refuses to arm a session a concurrent writer already created", () => {
+      const s = store()
+      s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
+      expect(() => s.save("sess-1", { ...INITIAL_STATE, edited: true, round: 9 }, 0)).toThrow()
+      expect(s.load("sess-1").round).toBe(0)
+    })
+
+    // Awkward case 2: the state being saved is itself initial-equivalent, so
+    // save() deletes rather than writes. A stale reset must not delete a
+    // concurrent writer's real progress out from under it.
+    test("refuses to delete when a newer, non-initial record landed first", () => {
+      const s = store()
+      s.save("sess-1", { ...INITIAL_STATE, edited: true, gating: true, round: 1, outcomes: ["verify-failed"] }, 0)
+      const loaded = s.load("sess-1")
+
+      // A concurrent writer advances the cycle further.
+      s.save("sess-1", { ...loaded, round: 2, outcomes: ["verify-failed", "verify-failed"] }, loaded.updatedAt)
+
+      // A stale accept-branch reset, computed from the pre-advance read,
+      // must not wipe it.
+      expect(() => s.save("sess-1", { ...INITIAL_STATE }, loaded.updatedAt)).toThrow()
+      expect(s.load("sess-1")).toMatchObject({ round: 2, outcomes: ["verify-failed", "verify-failed"] })
+      expect(fs.readdirSync(path.join(dir, ".km", "gate")).filter((f) => f.endsWith(".json"))).not.toBeEmpty()
+    })
+
+    test("two consecutive saves in the same store never stamp an identical updatedAt", () => {
+      const s = store()
+      s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
+      const v1 = s.load("sess-1").updatedAt
+      s.save("sess-1", { ...INITIAL_STATE, edited: true, round: 1 }, v1)
+      const v2 = s.load("sess-1").updatedAt
+      expect(v2).toBeGreaterThan(v1)
+    })
+  })
+
+  // The advisory lockfile closes the gap the compare-and-swap check alone
+  // cannot: the window between save()'s own re-read and its rename, where a
+  // second concurrent save() could otherwise still land a write. Acquire
+  // timeout and staleness threshold are overridden to small numbers here so
+  // these tests run fast without changing the logic under test.
+  describe("advisory lock (docs/known-issues.md #8)", () => {
+    const lockPathFor = (sessionID: string) =>
+      path.join(dir, ".km", "gate", `${recordName(sessionID)}.json.lock`)
+
+    test("leaves no lockfile behind after a save", () => {
+      const s = store()
+      s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
+      expect(fs.readdirSync(path.join(dir, ".km", "gate")).filter((f) => f.endsWith(".lock"))).toBeEmpty()
+    })
+
+    test("a live lock from another process makes save() degrade to unlocked rather than throw or hang", () => {
+      const s = new FileStateStore(path.join(dir, ".km", "gate"), 30, 2_000)
+      s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
+      const loaded = s.load("sess-1")
+
+      // Simulate another process actively holding the lock: fresh mtime, so
+      // it must not be reclaimed as stale.
+      const lockPath = lockPathFor("sess-1")
+      fs.writeFileSync(lockPath, "")
+
+      const started = Date.now()
+      expect(() => s.save("sess-1", { ...loaded, round: 1 }, loaded.updatedAt)).not.toThrow()
+      // Bounded by the 30ms acquire timeout above, not a hang.
+      expect(Date.now() - started).toBeLessThan(1_000)
+
+      // The save still landed — degraded to the CAS-only path, not refused.
+      expect(s.load("sess-1").round).toBe(1)
+      // The lock this store never acquired is untouched — it does not
+      // release a lock it does not own.
+      expect(fs.existsSync(lockPath)).toBe(true)
+    })
+
+    test("a stale lock from a killed process is reclaimed rather than blocking forever", () => {
+      const s = new FileStateStore(path.join(dir, ".km", "gate"), 500, 20)
+      s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
+      const loaded = s.load("sess-1")
+
+      const lockPath = lockPathFor("sess-1")
+      // A real, now-exited pid — spawnSync blocks until it's gone, so
+      // process.kill(dead, 0) is guaranteed ESRCH below.
+      const dead = spawnSync(process.execPath, ["--version"]).pid!
+      fs.writeFileSync(lockPath, String(dead))
+      const old = new Date(Date.now() - 1_000)
+      fs.utimesSync(lockPath, old, old) // older than the 20ms staleness threshold above
+
+      s.save("sess-1", { ...loaded, round: 1 }, loaded.updatedAt)
+      expect(s.load("sess-1").round).toBe(1)
+      // Reclaimed — old AND its recorded holder confirmed dead — then
+      // released again after this store's own use: no leftover, unlike the
+      // live-lock case above.
+      expect(fs.existsSync(lockPath)).toBe(false)
+    })
+
+    // docs/known-issues.md #8, defect 2: age alone is not enough to reclaim
+    // a lock — a holder can be merely slow rather than dead (a disk stall,
+    // scheduler preemption, a throttled cgroup, all realistic under WSL2).
+    // Stealing a live holder's lock on age alone would let two commit()
+    // calls run concurrently, both passing their own compare-and-swap —
+    // the exact lost update this lock exists to prevent, now masked by an
+    // apparently successful lock cycle.
+    test("an old lock whose holder is still alive is not reclaimed, even past the staleness threshold", () => {
+      const s = new FileStateStore(path.join(dir, ".km", "gate"), 30, 20)
+      s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
+      const loaded = s.load("sess-1")
+
+      const lockPath = lockPathFor("sess-1")
+      fs.writeFileSync(lockPath, String(process.pid)) // this test process — definitely alive
+      const old = new Date(Date.now() - 1_000)
+      fs.utimesSync(lockPath, old, old) // older than the 20ms staleness threshold, but the holder is not dead
+
+      // Still saves — degrades to the CAS-only unlocked path once the 30ms
+      // acquire timeout above elapses, exactly like the live-lock test above.
+      s.save("sess-1", { ...loaded, round: 1 }, loaded.updatedAt)
+      expect(s.load("sess-1").round).toBe(1)
+      // Age alone did not win: the lock is untouched, because its recorded
+      // holder is still alive. Age-only reclaim would have stolen it here.
+      expect(fs.existsSync(lockPath)).toBe(true)
+    })
+
+    test("a filesystem that rejects the lock operation outright still saves, unlocked", () => {
+      const s = store()
+      s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
+      const loaded = s.load("sess-1")
+
+      // Only the lockfile write is rejected — the real record write (a
+      // different path) must still go through unmocked.
+      const realWriteFileSync = fs.writeFileSync as (...args: unknown[]) => unknown
+      const writeFileSync = spyOn(fs, "writeFileSync").mockImplementation(((file: unknown, ...rest: unknown[]) => {
+        if (typeof file === "string" && file.endsWith(".lock")) {
+          throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" })
+        }
+        return realWriteFileSync(file, ...rest)
+      }) as typeof fs.writeFileSync)
+      try {
+        expect(() => s.save("sess-1", { ...loaded, round: 1 }, loaded.updatedAt)).not.toThrow()
+      } finally {
+        writeFileSync.mockRestore()
+      }
+      expect(s.load("sess-1").round).toBe(1)
+    })
   })
 
   // A session in flight across an upgrade must not lose its armed state.
@@ -287,7 +468,7 @@ describe("createNodeHost", () => {
 
   test("stores state under .km/gate inside the given root", () => {
     const host = createNodeHost({ root: dir, app: "x" })
-    host.state.save("sess-1", { ...INITIAL_STATE, edited: true })
+    host.state.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
     expect(fs.existsSync(path.join(dir, ".km", "gate"))).toBe(true)
   })
 

@@ -226,6 +226,132 @@ an edit to a tracked file. It will arm the session, and on the next stop it
 will resolve into a fourth cycle — one this text is written before and so
 cannot report. Left for whoever reads the stream next.
 
+### Update, same day — closing at seven cycles, and what a green gate here actually proves
+
+The fourth cycle the update above predicted for itself landed exactly as
+described: `ts 1786449047452`, `checkMs 3145` — writing that update's own
+text armed the session, and its own stop resolved it. The stream now holds
+**seven cycles**, all `2026-08-11`, all `pluginVersion "0.4.1"`, every one
+`rounds ["accepted"]` on the first round — zero blocked, zero exhausted:
+
+```
+#1  ts 1786445164706  checkMs 3337
+#2  ts 1786447808167  checkMs 3337
+#3  ts 1786448099161  checkMs 3294
+#4  ts 1786449047452  checkMs 3145   — writing the update above, predicted there
+#5  ts 1786449881944  checkMs 3319
+#6  ts 1786451074250  checkMs 3464
+#7  ts 1786453749755  checkMs 3478
+```
+
+Five commits landed on this branch since the update above: `97ae9b1` (the
+`ports.ts` doc-comment clarification), `4e6e11b` (recording the
+`FileStateStore` concurrency gap in `docs/known-issues.md`), `1f74ecb` (the
+update above, extending this entry to three cycles), `1589ae1` (the
+compare-and-swap fix itself), and `93b7986` (the advisory lock closing the
+window the compare-and-swap alone could not). The suite went from 319 tests
+to 325 (the compare-and-swap change) to 329 (the advisory-lock change).
+Checked directly, not assumed: every line this branch's test diffs remove is
+a mechanical signature adaptation (`save(id, s)` → `save(id, s,
+expectedUpdatedAt)`, the same shape everywhere) or replacing `FakeStore`'s
+no-op `save` with one that actually enforces the same contract — no
+`expect(...)` assertion was weakened or deleted anywhere in the diff. The
+diffs add assertions only.
+
+**Observation A, the important one: `bun test` as a gate check does two jobs
+of very different strength.** Regression detection is real here, and was
+genuinely exercised: `StateStore.save()`'s signature changed —
+`save(sessionID, state)` to `save(sessionID, state, expectedUpdatedAt)` — a
+breaking change that rippled through the kernel (`gate.ts`'s `persist` and
+every one of its call sites), both the real store and its in-memory test
+double, and both adapters' shared plumbing. 319 pre-existing tests could
+have broken on that change and did not — a real, checkable fact the gate
+confirmed, not an assumption. New-code correctness is a different, much
+weaker claim. For both concurrency changes this session — the
+compare-and-swap, the advisory lock — the implementation and its tests were
+authored in the same turn, and a test written to match an implementation it
+was written alongside passes **by construction**: the author already knows
+what the code does before writing the test that checks it. So a green cycle
+here is strong evidence the change did not break what was already pinned,
+and much weaker evidence that the new code itself is correct. This is not a
+kkamak defect — it is a property of any check-command gate — and it is the
+same shape as the 2026-08-07 entry's finding that a check cannot observe a
+dependence on the environment it runs in: a check command can only ever
+evidence what its assertions happen to cover, and for genuinely new logic
+the assertions and the logic usually share one author and one sitting.
+
+**Observation B: a controlled variation was run, and it came back
+negative.** Cycle 5 was prompted with an explicit instruction to run the
+suite before finishing ("Run bun test and tsc."). Cycle 7 explicitly forbade
+self-verification and told the session that ending the turn was the check
+("Do not run the test suite yourself — ending your turn is how this gets
+checked."). The session complied with both instructions as given, and still
+accepted on the first try on cycle 7 — the harder of the two tasks, an
+advisory lock with stale-lock reclaim and three distinct fail-open degrade
+paths, roughly nine minutes of session work. So the clean sweep across this
+update is not an artifact of the operator asking for self-verification.
+Recorded honestly rather than rounded to a cleaner story: the operator did
+instruct self-verification on cycle 5, and the session also ran an
+unprompted `tsc --noEmit` check on cycle 2 (the `ports.ts` doc-comment fix),
+unasked — so self-verification was not suppressed on every other cycle, only
+explicitly forbidden on cycle 7.
+
+**Observation C: the verify-failed-then-accepted shape remains unobserved
+on the rewritten kernel, across all seven cycles now.** No block was
+manufactured and no task was re-run chasing one — each of the seven was
+attempted once, and the outcome recorded as it fell, first try every time.
+The corpus note earlier in this entry stands exactly as before: 5 real
+block-then-accept instances, all at `0.2.0`, none yet on this kernel.
+
+**The off-by-one, again.** Writing this closing section is itself an edit to
+a tracked file. It will arm the session, and its own stop will resolve into
+an eighth cycle — one this section is written before and so cannot report.
+
+**CORRECTION, next day.** Observation C above is wrong. It is left standing
+rather than edited away, because the error is itself the finding.
+
+Cycle 9, `ts 1786494056836`, recorded `rounds: ["verify-failed","accepted"]`,
+`checkMs: [3424, 3383]`, `durationMs: 86198` — roughly 7s of checking against
+~79s of the model working under the block. It is the first block-then-accept
+this entry has recorded on the rewritten kernel, and it was not
+manufactured: no task was re-run to chase one. It arose from the fix for two
+defects a second independent architect review found in the concurrency
+commits (`docs/known-issues.md` #8).
+
+**Record precisely what the gate actually caught, because it is not what it
+looks like.** The failing check was not a defect in that fix. It was a false
+positive in this repo's own `test/imports.test.ts`: its import scanner is a
+regex over raw source text, not comment-aware, and it matched prose inside a
+doc comment — the words `from "old and merely` … `slow"`, spanning two
+comment lines — as if they were an import statement.
+
+So the honest scoreboard across all nine cycles in this entry: **zero real
+defects caught by the gate, one false positive.** Both genuine defects in
+this work — the original `FileStateStore` race, and the unguarded
+reverse-ordering in the first fix for it — were found by independent
+review, each time *after* the gate had already accepted the code with a
+fully green suite. State it plainly rather than let the count flatter the
+instrument: the gate evidences that nothing already pinned broke; review is
+what finds what was got wrong. Observation A earlier in this section already
+reached this conclusion in the abstract; this cycle is that conclusion's
+first concrete instance in this entry's own stream.
+
+**The uncomfortable part.** The false positive was resolved by rewording the
+comment, not by fixing the scanner that misreads prose as an import. That is
+gate-avoidance pressure in the same shape the 2026-08-07 entry below
+documents on `cc-api-daemon` — the cheapest way to go green is not always
+the correct fix — except this instance was produced by the operator under
+the very gate being measured here, and would have gone unnoticed had the
+commit body not said so plainly. The scanner defect remains **unfiled and
+unfixed** — only the comment moved. The scanner was already known-limited:
+the 0.4.0 pre-release review's finding 2 flagged that "the import scan
+cannot prove itself" (`docs/superpowers/plans/
+2026-07-30-kernel-review-remediation.md:361`) — that finding was about
+under-detection, a regex missing a real violation, and today's failure runs
+the other way, a regex mistaking prose for one — but both are the same root
+cause: a text regex standing in for a real import-graph analysis, with
+neither its precision nor its recall ever fully proven.
+
 ## 2026-08-07 — FIRST NON-kkamak SUBJECT REPO: gate armed on `cc-api-daemon` (yoo-dev)
 
 **Read the scope line first.** Every other entry in this file is kkamak

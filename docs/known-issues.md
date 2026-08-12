@@ -115,7 +115,7 @@ Resolved: `test/runtime.test.ts`'s logger test now spies on
 `process.stderr.write` and asserts the delivered message, so no bare
 `hello` reaches the run's output.
 
-## 8. `FileStateStore.save()` is a blind overwrite — concurrent handlers can race and lose an update
+## 8. `FileStateStore.save()` is a blind overwrite — concurrent handlers can race and lose an update — RESOLVED
 
 Flagged by an independent architect review, 2026-08-11. `FileStateStore.save()`
 (`src/runtime/file-state-store.ts:36-53`) writes via temp-file-plus-rename, so
@@ -155,6 +155,222 @@ sensor stream, not availability. The fix is optimistic concurrency (re-read
 and compare `updatedAt` before the rename) or an OS advisory lock in
 `FileStateStore`, plus tests that exercise the actual cross-process/cross-callback
 race — too large to land unplanned on release day.
+
+**Partially resolved.** `FileStateStore.save()` now does a compare-and-swap:
+it re-reads the on-disk record immediately before committing and throws
+rather than overwrite when its `updatedAt` doesn't match the
+`expectedUpdatedAt` the caller's `state` was loaded with. That version is
+threaded from `load()` through every `gate.ts` handler via the `state`
+parameter each already holds — the `StateStore.save()` port signature changed
+to `save(sessionID, state, expectedUpdatedAt)` accordingly, both
+implementations and every call site updated. A stale write now throws,
+`persist()`'s existing catch turns that into `false`, and the block branch's
+existing "cannot record → downgrade to allow" path handles it exactly like
+any other save failure — fail-open holds.
+
+This closes the failure case described above: the load-then-slow-check
+window, where process A sits on a stale `load()` for up to `checkTimeoutMs`
+while a faster writer B commits first. **It does not close the
+read-to-rename window**: `save()`'s own compare read and its later
+`fs.renameSync` are two separate syscalls with nothing holding a lock between
+them, so a second OS process could still land a write in that narrow gap and
+still win a race against this store's own compare-and-swap. That is the
+OS-advisory-lock half of the fix named in the original judgement above, and
+it is still not implemented — this remains the honest boundary of what a
+single-process optimistic check can guarantee. Regression tests
+(`test/runtime.test.ts`, `test/gate.test.ts`) cover the stale-write refusal,
+both awkward cases named in the original finding (racing to create a
+session's first record, racing to delete one a concurrent writer just
+advanced), and that losing the race still fails open end-to-end through the
+kernel.
+
+**Fully resolved.** `FileStateStore.save()`'s whole read-modify-write — the
+compare-and-swap read, the accept/delete decision, and the commit itself —
+now also runs under a best-effort advisory lock (`FileStateStore.withLock`),
+closing the read-to-rename window the "Partially resolved" note above named
+as still open. It is a lockfile via atomic `O_CREAT|O_EXCL` create (`"wx"`),
+not a real `flock` syscall — Node's `fs` module exposes none without a
+native addon, and this is the technique effectively every userland Node
+lockfile library falls back to instead. Two concurrent `save()` calls for
+the same session now serialize, so one's compare-and-swap read can no longer
+interleave with the other's rename.
+
+This does not make the lock unconditional, by design. Fail-open is absolute
+(`gate.ts`'s governing rule), so a lock that cannot be acquired within a
+bounded timeout, a lock left behind by a killed process (reclaimed once it
+is older than a generous staleness threshold rather than waited out
+indefinitely), or a filesystem that rejects the lock operation outright
+(`EACCES`, `EROFS`, an unsupported call) all fall through to running the
+read-modify-write **unlocked** — still protected by the compare-and-swap
+check alone, exactly as in the "Partially resolved" state above. A `save()`
+that takes that degraded path is exposed only to the microscopic
+read-to-rename gap this lock exists to close; the much larger
+load-then-slow-check race the compare-and-swap check closes on its own still
+holds unconditionally either way. The lockfile technique also inherits the
+standard caveat any `O_CREAT|O_EXCL`-based lock has on very old NFS versions
+that do not implement it atomically — the same caveat a real `flock` would
+have there too, and not a new limitation this introduces. Regression tests
+(`test/runtime.test.ts`) cover a live lock forcing the degraded path without
+hanging or throwing, a stale lock being reclaimed rather than blocking
+forever, and a filesystem that rejects the lock operation outright still
+completing the save unlocked.
+
+**A second, independent review of this fix found two more gaps, both now
+closed.**
+
+**Defect 1 (high): the reset in `onNewUserPrompt` ignored its own
+`persist()` failure.** `onStopRequested`'s block branch already checked
+`persist()`'s return and downgraded to `allow` on a lost compare-and-swap
+(pinned by `test/gate.test.ts`'s "a concurrent writer during a slow check
+wins the race" test, above) — but the reverse interleaving was unguarded.
+Setup: `gating:true, round:1, updatedAt:U0` on disk. A `stop-requested` and
+a `new-user-prompt` both load `U0`; this time the stop-requested handler is
+the fast one and lands its own block first, `round:2, updatedAt:U1`. The
+prompt handler's reset then computes its compare-and-swap against the now-
+stale `U0`, loses, `persist()` returns `false` — and the old code returned
+`allow` anyway without checking. On-disk state was left `gating:true,
+round:2` even though the human had moved on, while the sensor line already
+claimed `interrupted:true` — state and telemetry disagreeing. Worse: a
+later, unrelated cycle would then see `state.round === config.rounds` and
+exhaust on its very first failing check with zero blocks of its own
+issued — this issue's own headline symptom, reproduced through the one
+path the first pass left unguarded. Reachable in a single process, no
+second process needed: opencode's `chat.message` and `session.idle`
+handlers share one `gate` instance and can race the same way.
+
+Fixed: `onNewUserPrompt`'s reset now checks `persist()`'s return, and on a
+lost race reloads the current state and retries the reset once against the
+fresh `updatedAt`. Human preemption is unconditional intent — it wins by
+retrying, not by silently no-op'ing. One retry, not a loop: a second lost
+race — needing a *third* write to land in the brief window between the
+retry's own load and its persist — is left alone rather than chased
+further.
+
+**That residual is not a fail-open case, and an earlier draft of this entry
+mislabeled it as one.** Fail-open means this session's own turn is allowed
+through regardless, which was already true before this fix existed and
+isn't what's at stake here. What a second lost race actually leaves behind
+is this issue's own over-gating symptom, narrowed rather than eliminated: a
+later, unrelated cycle could still inherit a stale round count from
+whichever write won that second race, and exhaust on its first failing
+check with zero blocks of its own issued. Narrower by a wide margin than
+the defect this fix closes — it now takes three overlapping writers instead
+of two — but not zero, and not the same shape as fail-open. Corrected here
+rather than left mislabeled, because a wrong justification is how an
+accepted risk gets re-accepted later without re-examination. Pinned by
+`test/gate.test.ts`'s "a concurrent writer that lands a block first still
+loses to the human's reset, once retried" test — the mirror image of the
+existing one.
+
+The same ignored-return shape was audited at the two other places
+`persist`/`withPersist`'s return goes unchecked in `gate.ts`:
+- `onFileEdited` (arming): the payload only ever flips `edited` false→true.
+  Losing the race against another concurrent arm is harmless (both write the
+  same value); losing it against a concurrent reset drops this one edit's
+  mark, which under-gates rather than over-blocks — the same direction the
+  file's own fail-open rule already calls for, and the same conclusion the
+  original 2026-07-30 review reached for this exact line. Left as-is.
+- `onInternalError`'s sub-limit branch (the `errorStreak` increment before
+  disarm): the payload only increments a counter on top of whatever `state`
+  already carries; it does not undo a concurrent writer's real progress.
+  Losing the race just delays disarm-after-3 by at most one extra internal
+  error, never skips or corrupts it. Left as-is.
+- The disarm branch itself (`{...INITIAL_STATE, errorStreak, disarmed:true}`)
+  is structurally closer to `onNewUserPrompt`'s case than to either of the
+  above — a full reset representing its own kind of unconditional intent —
+  but was out of scope for this review. Noted in `gate.ts` as a candidate
+  for the same retry treatment if it gets a closer look; not fixed here.
+
+**Defect 2 (medium): `reclaimIfStale` judged staleness on age alone.**
+`DEFAULT_LOCK_STALE_MS` (2000ms) is far longer than any real critical
+section, but age alone cannot distinguish a dead holder from a merely slow
+one — a disk stall, scheduler preemption, or a throttled cgroup (all
+realistic under WSL2) can push a live holder's critical section past the
+threshold. The old code reclaimed on age alone, so a second writer could
+steal a still-live holder's lock, and both would then run `commit()`
+concurrently — both reading the same pre-write value and both passing their
+own compare-and-swap, reintroducing the exact lost update this lock exists
+to prevent, now masked by an apparently successful lock cycle instead of
+surfaced as a conflict.
+
+Fixed: the lockfile now records its holder's pid (still one atomic create —
+`fs.writeFileSync(lockPath, String(process.pid), {flag:"wx"})`), and
+`reclaimIfStale` reclaims only when BOTH the age check and a liveness check
+(`process.kill(pid, 0)` throwing `ESRCH`) agree the holder is gone. A pid
+that cannot be read or parsed is left alone rather than guessed at — that
+case still falls back to the bounded acquire timeout in `withLock`, which is
+what actually prevents wedging either way, not this staleness check.
+Regression tests (`test/runtime.test.ts`) cover a stale lock with a
+confirmed-dead pid being reclaimed, and — the case the defect was actually
+about — an old lock whose recorded holder is still alive NOT being reclaimed
+even past the staleness threshold.
+
+**A related residual, not previously documented here: pid reuse.** If a
+holder crashes after writing the lockfile but before its own
+`finally`-release runs, the lockfile is left stamped with that holder's
+pid. Should the OS later recycle that exact pid to any unrelated live
+process before this lock is next contended, `process.kill(pid, 0)` succeeds
+against the new process and the lock is never reclaimed by the liveness
+check either. This shares its fallback with the unparseable-pid case just
+above and cannot wedge for the same reason: the same bounded acquire
+timeout in `withLock` covers it too, degrading to the CAS-only unlocked
+path exactly as it would for any other unreclaimable lock. The cost is
+narrower than a wedge but real — whichever session hits it pays a full
+`lockAcquireTimeoutMs` stall on every `save()` against that lockfile, plus
+an orphaned lockfile that persists until the recycled pid itself exits.
+Untestable by construction — a pid recycle cannot be forced
+deterministically — which is exactly why it is documented here and at
+`reclaimIfStale`'s own comment in `file-state-store.ts` rather than pinned
+by a test.
+
+## 9. `test/imports.test.ts`'s import scanner is a regex over raw text, not comment-aware — prose can be misread as an import
+
+`importsIn()` (`test/imports.test.ts:36-39`) scans a file's raw source text
+with `/(?:\b(?:import|export)\b[\s\S]*?\bfrom\s*|\bimport\s*|\brequire\s*)
+\(?\s*["']([^"']+)["']/g` — matching the literal words `import`/`export`/
+`require`, followed by any characters at all (`[\s\S]*?`, non-greedy but
+unbounded), then `from` and a quoted string. It never strips comments
+first, so `import`, `export`, `require`, and `from` mean nothing special to
+it inside a `//` or `/* */` comment — they read exactly as code would.
+
+**Concrete instance, hit for real during this work.** A doc comment in
+`src/runtime/file-state-store.ts` read, across two comment lines: `tell
+"old and abandoned" from "old and merely` / `slow" apart in
+reclaimIfStale below...`. The scanner matched `from "old and merely\n
+      // slow"` as an import specifier — a two-line quoted string built by
+treating the comment's own line break as if it were source — and
+`test/imports.test.ts`'s "no import depends on a package that installation
+would leave behind" test failed on it, blocking the turn. Nothing about the
+code was wrong; the words were prose describing what the code does.
+
+That failure was resolved by rewording the comment, not by fixing the
+scanner. The defect is therefore still present on `main`: the next comment
+that happens to contain the word `from` followed eventually by a quoted
+phrase — plausible in any comment describing string handling, error
+messages, or (as here) explaining a data-format distinction in prose — will
+fail the suite the same way, and the cheapest fix available in the moment
+will again be to edit the comment rather than the scanner.
+
+This connects to a limitation already on record. The 0.4.0 pre-release
+review's finding 2 flagged that "the import scan cannot prove itself"
+(`docs/superpowers/plans/2026-07-30-kernel-review-remediation.md:361`) —
+that finding was about **under**-detection, a regex that could miss a real
+violation with nothing to prove otherwise. This is the same root cause
+running the other way: a text regex standing in for real import-graph
+analysis, with neither its precision nor its recall ever fully proven. Both
+directions are consequences of scanning text instead of parsing it.
+
+**Judgement: recorded, not fixed.** A real fix needs either an actual
+parser (so `import`/`from`/`require` are only meaningful in syntactic
+position, never inside a comment or string literal) or, at minimum,
+stripping comments from the source before the regex runs — the latter is a
+smaller change but only closes this specific direction, not the sibling
+under-detection gap finding 2 already named. Leaving it as-is carries a
+real risk beyond an occasional false alarm: it is a test that can fail on
+provably correct code, and a test that does that trains whoever hits it to
+edit until the test stops complaining rather than to trust it — exactly the
+gate-avoidance shape recorded in this session's `docs/dogfood-log.md`
+correction to the 2026-08-11 entry.
 
 ## Regression: `gate.json`'s `gauge` field was wrongly removed, then restored
 

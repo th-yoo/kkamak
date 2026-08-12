@@ -175,7 +175,24 @@ export interface CheckRunner {
 export interface StateStore {
   /** Never throws: absent, corrupt and wrong-shaped all read as initial state. */
   load(sessionID: string): GateState
-  save(sessionID: string, state: GateState): void
+  /**
+   * Optimistic concurrency control (docs/known-issues.md #8). `expectedUpdatedAt`
+   * is the `updatedAt` of the `GateState` the caller's decision was computed
+   * from — what `load()` returned right before this call chain began. `0`
+   * (`INITIAL_STATE.updatedAt`) doubles as the "no record existed at load
+   * time" sentinel, since a real record's `updatedAt` is a wall-clock ms
+   * stamp and can never be 0.
+   *
+   * Implementations MUST verify, immediately before committing, that what is
+   * currently persisted still carries that same `updatedAt` (or is still
+   * absent, for the `0` sentinel) — and throw rather than commit on a
+   * mismatch, so a write based on a stale read can never clobber a write
+   * that landed after that read. This is not a new failure mode: `save()`
+   * was already allowed to throw (full disk, permissions), and the kernel
+   * already treats any `save()` failure as fail-open (`gate.ts`'s
+   * `persist`). A version conflict is reported through that same path.
+   */
+  save(sessionID: string, state: GateState, expectedUpdatedAt: number): void
 }
 
 export interface SensorSink {
