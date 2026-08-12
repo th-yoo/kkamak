@@ -5,6 +5,49 @@ All notable changes to this project are documented in this file, starting at 0.4
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Details for each entry live in [`docs/dogfood-log.md`](docs/dogfood-log.md), linked per entry below.
 
+## [0.6.0] - 2026-08-12
+
+Cycle tagging: two sensor booleans that record which cycles have the shape
+independent review keeps catching defects in — implementation and its tests
+authored in the same turn. The gate's own 13-cycle dogfood scoreboard (zero
+real catches, two review-found defects, both in same-turn-co-edit cycles) is
+the motivating evidence; these fields make that review attention aimable.
+Both are additive and the frozen consumer contract tolerates their absence.
+Full narrative in [dogfood log](docs/dogfood-log.md#2026-08-12--a1-cycle-tagging-built-by-a-driven-dogfood-session-reviewed-by-a-loop-yoo-mac).
+
+### Added
+
+- `SensorLine.implOnly` — the cycle touched source files and no test files.
+- `SensorLine.sameTurnCoEdit` — the cycle touched both source and test
+  files in one turn. Both fields are **absent, not false**, whenever the
+  touched-path set cannot be trusted to answer the question: no paths
+  reported (opencode adapter; lines predating this release), a truncated
+  set, or a cycle that has not actually finished (`skippedStop`).
+- `GateEvent`'s `file-edited` variant gains an optional `path`. The Claude
+  Code adapter supplies it from the PostToolUse payload's
+  `tool_input.file_path`; the opencode adapter deliberately passes none —
+  its hook argument shape is unpinned upstream, and a guessed path would be
+  worse than an absent field.
+- `GateState` gains a bounded `touchedPaths` set (cap 200) with a
+  `touchedTruncated` flag; state records written by earlier versions still
+  load. Raw paths never leave `.km/` state — only the derived booleans
+  reach the sensor line, pinned by a serialization test.
+- `gate.json` gains optional `testPathPattern`, overriding the built-in
+  test-path heuristic (`test`/`spec`/`__tests__` conventions). Parsed with
+  the same never-throw discipline as every other field, documented as a
+  heuristic, and structurally unable to influence any gate decision —
+  telemetry only, pinned by a regression test.
+
+### Fixed
+
+- Three compare-and-swap gaps in state resets — the accept and exhaust
+  resets in `onStopRequested` (a gap this release's own path-tracking
+  widened) and the pre-existing, self-flagged disarm reset in
+  `onInternalError` — now share one `resetWithRetry` helper implementing
+  the same one-retry-on-CAS-loss pattern `onNewUserPrompt` already used,
+  with a lost-race regression test for each (`docs/known-issues.md` #11,
+  resolved).
+
 ## [0.5.0] - 2026-08-12
 
 Two sensor fields that make a stream readable without an operator's memory,

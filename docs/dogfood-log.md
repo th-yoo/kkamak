@@ -49,6 +49,44 @@ the day's sensor numbers, and mechanism observations the sensor stream
 cannot see (behavioral shifts, qualitative saves, instrument anomalies).
 This file is proposer evidence — keep entries factual and dated.
 
+## 2026-08-12 — A1 cycle tagging built by a driven dogfood session, reviewed by a loop (yoo-mac)
+
+**What shipped.** `implOnly` and `sameTurnCoEdit` on the sensor line — the
+A1 item from the 08-12 follow-up list (A2–A4 shipped in 0.5.0), built from
+`HANDOFF-A1.md` on `feat/cycle-tagging` exactly as the handoff specified,
+merged `75109d1`. Suite 351 → 418 tests, typecheck clean. Released as 0.6.0.
+
+**How it was built — a first for this repo.** The implementer was a Claude
+Code session in this repo, gated by kkamak, launched and driven over tmux by
+a *different* Claude session working in the meta-harness repo (itself gated
+by the research build). Permission prompts were approved through the pane;
+the handoff file was the only brief. Review was a ralph loop (max 3
+iterations, fresh `code-architect` context per pass): pass 1 found a real
+CAS retry gap the feature had widened plus a classifier false negative on
+bare `test.ts`/`spec.ts` names; pass 2, explicitly not trusting pass 1's fix
+claims, found a doc comment contradicting a pinned test. Two iterations, no
+third needed.
+
+**Gate scoreboard for the day: 2 cycles, 2 round-0 accepts, 0 blocks, 0
+defects caught by the gate — 3 real defects caught by review.** The pattern
+the 13-cycle entry named holds on the very build that ships the fields meant
+to make it aimable. And this build was itself one long same-turn co-edit:
+the exact shape `sameTurnCoEdit` will label once a release actually emits it.
+
+**Attribution note, live again.** Both of today's lines in this repo's
+stream were written by the *research build* (they carry `gauge` and stamp
+`pluginVersion 0.4.2`, no `product` field) — the public plugin still isn't
+what gates sessions on this machine. `product` fixes exactly this ambiguity,
+and today's lines demonstrate one more time why absence-means-unattributable
+is the honest reading.
+
+**One scanner note.** The implementer hit the `test/imports.test.ts`
+comment-scanner false positive (known-issues #9) with nested quotes in its
+own doc comments and resolved it by rewording the comments — the second
+reword-to-pass-the-scanner event on record after cycle 9. Right call here
+(the constraint forbade weakening the scanner mid-build), but #9's cost is
+now recurring, not hypothetical.
+
 ## 2026-08-12 — 0.5.0: two sensor fields, a timeout clamp, and what verification order buys (yoo-dev)
 
 **What shipped.** `product` and `roundsMax` on the sensor line, plus a clamp
