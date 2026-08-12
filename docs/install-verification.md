@@ -27,10 +27,21 @@ at `aec746a` rather than the tag, per the clone behaviour above. `0.4.2` was
 run on 2026-08-12 against `main` at `c2ee18d`, the commit subsequently
 tagged, and passed every assertion including a live block
 (`gateExhausted: true`, two `verify-failed` rounds, `pluginVersion 0.4.2`).
-`0.5.0` has **not** been run: its assertions below were advanced from 0.4.2
-to 0.5.0 so the procedure targets the release it now describes, but no one
-has executed them against a real install yet. The two sentences above are
-history and were left at the versions actually run — do not advance them.
+`0.5.0` was run on 2026-08-12 against `main` at `1cdaebf`, the commit
+subsequently tagged, and passed every assertion: exactly one `/0.5.0/` cache
+directory, and a live block ending in exhaustion whose sensor line read
+`gateExhausted: true`, two `verify-failed` rounds, `pluginVersion 0.5.0`,
+`product "kkamak"`, `roundsMax 1`.
+
+`0.5.0` was *also* run before that merge, against the same tree installed
+from a **directory-source** marketplace instead of a GitHub clone. That is
+the only pre-merge verification this procedure's own clone behaviour allows:
+until 0.5.0 reached the default branch, a real `marketplace add` would have
+installed 0.4.2 and "verified" the previous release. Both passes are worth
+recording because they prove different things — the directory-source pass
+proves the tree installs and blocks, the post-merge pass proves the clone
+path actually delivers that tree. The pre-merge pass is what found
+`docs/known-issues.md` #10.
 
 ## 0. Why this whole procedure runs against an isolated config, not your real one
 
@@ -64,6 +75,14 @@ do it. Set the override once, for the whole procedure:
 export CLAUDE_CONFIG_DIR=$(mktemp -d)
 echo "Isolated config: $CLAUDE_CONFIG_DIR"
 ```
+
+**Keep that directory on a Linux filesystem — measured 2026-08-12.** On WSL2
+it is tempting to put it under a Windows mount (`/mnt/c`, `/mnt/d`), which is
+where scratch work often lives. Don't: DrvFS carries no Unix permission bits,
+so the `install -m 600` in step 3 *silently fails* — `chmod: Operation not
+permitted` — and the seeded credential is left readable by anything that can
+reach the mount. `mktemp -d` with no argument lands in `/tmp`, which is fine;
+`mktemp -d "$HOME/.kkverify-XXXX"` is fine too. A path under `/mnt/` is not.
 
 Run every command below, and the Claude Code session in step 3, in that same
 shell / with that same `CLAUDE_CONFIG_DIR` exported — every path in this
@@ -207,6 +226,15 @@ CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" claude -p \
   "create scratch.txt with the word hi in it" \
   --permission-mode acceptEdits
 ```
+
+**Give that turn room to finish — measured 2026-08-12.** It is a real model
+turn plus two gate cycles, so it takes tens of seconds, and `rounds: 1` means
+the agent is blocked once and works again before exhausting. Run it where a
+short timeout cannot kill it: driven from an automation harness with a
+seconds-scale command timeout, it was killed mid-turn (`exit 143`) and left a
+scratch repo with no sensor line — which looks exactly like a gate that never
+armed. Run it in the foreground, or detached with a timeout in the hundreds
+of seconds, and read the sensor file afterwards rather than watching stdout.
 
 Run from `/tmp/kkamak-install-check`. Because `check` is `exit 1`, it can
 never pass: you should see the turn blocked, with the check's failure output
