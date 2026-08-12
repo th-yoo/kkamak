@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
+import { spawnSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -317,15 +318,45 @@ describe("FileStateStore", () => {
       const loaded = s.load("sess-1")
 
       const lockPath = lockPathFor("sess-1")
-      fs.writeFileSync(lockPath, "")
+      // A real, now-exited pid — spawnSync blocks until it's gone, so
+      // process.kill(dead, 0) is guaranteed ESRCH below.
+      const dead = spawnSync(process.execPath, ["--version"]).pid!
+      fs.writeFileSync(lockPath, String(dead))
       const old = new Date(Date.now() - 1_000)
       fs.utimesSync(lockPath, old, old) // older than the 20ms staleness threshold above
 
       s.save("sess-1", { ...loaded, round: 1 }, loaded.updatedAt)
       expect(s.load("sess-1").round).toBe(1)
-      // Reclaimed, then released again after this store's own use — no
-      // leftover, unlike the live-lock case above.
+      // Reclaimed — old AND its recorded holder confirmed dead — then
+      // released again after this store's own use: no leftover, unlike the
+      // live-lock case above.
       expect(fs.existsSync(lockPath)).toBe(false)
+    })
+
+    // docs/known-issues.md #8, defect 2: age alone is not enough to reclaim
+    // a lock — a holder can be merely slow rather than dead (a disk stall,
+    // scheduler preemption, a throttled cgroup, all realistic under WSL2).
+    // Stealing a live holder's lock on age alone would let two commit()
+    // calls run concurrently, both passing their own compare-and-swap —
+    // the exact lost update this lock exists to prevent, now masked by an
+    // apparently successful lock cycle.
+    test("an old lock whose holder is still alive is not reclaimed, even past the staleness threshold", () => {
+      const s = new FileStateStore(path.join(dir, ".km", "gate"), 30, 20)
+      s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
+      const loaded = s.load("sess-1")
+
+      const lockPath = lockPathFor("sess-1")
+      fs.writeFileSync(lockPath, String(process.pid)) // this test process — definitely alive
+      const old = new Date(Date.now() - 1_000)
+      fs.utimesSync(lockPath, old, old) // older than the 20ms staleness threshold, but the holder is not dead
+
+      // Still saves — degrades to the CAS-only unlocked path once the 30ms
+      // acquire timeout above elapses, exactly like the live-lock test above.
+      s.save("sess-1", { ...loaded, round: 1 }, loaded.updatedAt)
+      expect(s.load("sess-1").round).toBe(1)
+      // Age alone did not win: the lock is untouched, because its recorded
+      // holder is still alive. Age-only reclaim would have stolen it here.
+      expect(fs.existsSync(lockPath)).toBe(true)
     })
 
     test("a filesystem that rejects the lock operation outright still saves, unlocked", () => {
@@ -333,13 +364,19 @@ describe("FileStateStore", () => {
       s.save("sess-1", { ...INITIAL_STATE, edited: true }, 0)
       const loaded = s.load("sess-1")
 
-      const openSync = spyOn(fs, "openSync").mockImplementation(() => {
-        throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" })
-      })
+      // Only the lockfile write is rejected — the real record write (a
+      // different path) must still go through unmocked.
+      const realWriteFileSync = fs.writeFileSync as (...args: unknown[]) => unknown
+      const writeFileSync = spyOn(fs, "writeFileSync").mockImplementation(((file: unknown, ...rest: unknown[]) => {
+        if (typeof file === "string" && file.endsWith(".lock")) {
+          throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" })
+        }
+        return realWriteFileSync(file, ...rest)
+      }) as typeof fs.writeFileSync)
       try {
         expect(() => s.save("sess-1", { ...loaded, round: 1 }, loaded.updatedAt)).not.toThrow()
       } finally {
-        openSync.mockRestore()
+        writeFileSync.mockRestore()
       }
       expect(s.load("sess-1").round).toBe(1)
     })

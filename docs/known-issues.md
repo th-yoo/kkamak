@@ -215,6 +215,81 @@ hanging or throwing, a stale lock being reclaimed rather than blocking
 forever, and a filesystem that rejects the lock operation outright still
 completing the save unlocked.
 
+**A second, independent review of this fix found two more gaps, both now
+closed.**
+
+**Defect 1 (high): the reset in `onNewUserPrompt` ignored its own
+`persist()` failure.** `onStopRequested`'s block branch already checked
+`persist()`'s return and downgraded to `allow` on a lost compare-and-swap
+(pinned by `test/gate.test.ts`'s "a concurrent writer during a slow check
+wins the race" test, above) — but the reverse interleaving was unguarded.
+Setup: `gating:true, round:1, updatedAt:U0` on disk. A `stop-requested` and
+a `new-user-prompt` both load `U0`; this time the stop-requested handler is
+the fast one and lands its own block first, `round:2, updatedAt:U1`. The
+prompt handler's reset then computes its compare-and-swap against the now-
+stale `U0`, loses, `persist()` returns `false` — and the old code returned
+`allow` anyway without checking. On-disk state was left `gating:true,
+round:2` even though the human had moved on, while the sensor line already
+claimed `interrupted:true` — state and telemetry disagreeing. Worse: a
+later, unrelated cycle would then see `state.round === config.rounds` and
+exhaust on its very first failing check with zero blocks of its own
+issued — this issue's own headline symptom, reproduced through the one
+path the first pass left unguarded. Reachable in a single process, no
+second process needed: opencode's `chat.message` and `session.idle`
+handlers share one `gate` instance and can race the same way.
+
+Fixed: `onNewUserPrompt`'s reset now checks `persist()`'s return, and on a
+lost race reloads the current state and retries the reset once against the
+fresh `updatedAt`. Human preemption is unconditional intent — it wins by
+retrying, not by silently no-op'ing. One retry, not a loop; a second lost
+race is left alone, consistent with fail-open. Pinned by
+`test/gate.test.ts`'s "a concurrent writer that lands a block first still
+loses to the human's reset, once retried" test — the mirror image of the
+existing one.
+
+The same ignored-return shape was audited at the two other places
+`persist`/`withPersist`'s return goes unchecked in `gate.ts`:
+- `onFileEdited` (arming): the payload only ever flips `edited` false→true.
+  Losing the race against another concurrent arm is harmless (both write the
+  same value); losing it against a concurrent reset drops this one edit's
+  mark, which under-gates rather than over-blocks — the same direction the
+  file's own fail-open rule already calls for, and the same conclusion the
+  original 2026-07-30 review reached for this exact line. Left as-is.
+- `onInternalError`'s sub-limit branch (the `errorStreak` increment before
+  disarm): the payload only increments a counter on top of whatever `state`
+  already carries; it does not undo a concurrent writer's real progress.
+  Losing the race just delays disarm-after-3 by at most one extra internal
+  error, never skips or corrupts it. Left as-is.
+- The disarm branch itself (`{...INITIAL_STATE, errorStreak, disarmed:true}`)
+  is structurally closer to `onNewUserPrompt`'s case than to either of the
+  above — a full reset representing its own kind of unconditional intent —
+  but was out of scope for this review. Noted in `gate.ts` as a candidate
+  for the same retry treatment if it gets a closer look; not fixed here.
+
+**Defect 2 (medium): `reclaimIfStale` judged staleness on age alone.**
+`DEFAULT_LOCK_STALE_MS` (2000ms) is far longer than any real critical
+section, but age alone cannot distinguish a dead holder from a merely slow
+one — a disk stall, scheduler preemption, or a throttled cgroup (all
+realistic under WSL2) can push a live holder's critical section past the
+threshold. The old code reclaimed on age alone, so a second writer could
+steal a still-live holder's lock, and both would then run `commit()`
+concurrently — both reading the same pre-write value and both passing their
+own compare-and-swap, reintroducing the exact lost update this lock exists
+to prevent, now masked by an apparently successful lock cycle instead of
+surfaced as a conflict.
+
+Fixed: the lockfile now records its holder's pid (still one atomic create —
+`fs.writeFileSync(lockPath, String(process.pid), {flag:"wx"})`), and
+`reclaimIfStale` reclaims only when BOTH the age check and a liveness check
+(`process.kill(pid, 0)` throwing `ESRCH`) agree the holder is gone. A pid
+that cannot be read or parsed is left alone rather than guessed at — that
+case still falls back to the bounded acquire timeout in `withLock`, which is
+what actually prevents wedging either way, not this staleness check.
+Regression tests (`test/runtime.test.ts`) cover a stale lock with a
+confirmed-dead pid being reclaimed, and — the case the defect was actually
+about — an old lock whose recorded holder is still alive NOT being reclaimed
+even past the staleness threshold.
+
 ## Regression: `gate.json`'s `gauge` field was wrongly removed, then restored
 
 This repo's own tracked `gate.json` carries `"gauge": true`. The public

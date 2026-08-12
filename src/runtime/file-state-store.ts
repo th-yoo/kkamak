@@ -122,16 +122,18 @@ export class FileStateStore implements StateStore {
    * Absolute constraint: a lock that cannot be acquired, a stale lock left
    * by a killed process, or a filesystem that rejects the lock operation
    * outright must never wedge a session or block a turn permanently. So:
-   * acquisition is bounded (lockAcquireTimeoutMs), a lock older than
-   * lockStaleMs is treated as abandoned and reclaimed rather than waited
-   * out, and any acquisition failure — timeout, or open() itself failing
-   * for a reason other than contention (EACCES, EROFS, an unsupported
-   * operation) — falls through to running the critical section unlocked
-   * rather than throwing or waiting indefinitely. Unlocked is not unsafe
-   * here: commit()'s own compare-and-swap still applies, so a save that
-   * runs unlocked is exposed only to the one microscopic race this lock
-   * exists to close, not to the much larger one the version check already
-   * closes on its own.
+   * acquisition is bounded (lockAcquireTimeoutMs); a lock is reclaimed
+   * rather than waited out only once it is both older than lockStaleMs AND
+   * its recorded holder pid is confirmed dead, not on age alone (see
+   * reclaimIfStale — age alone would let a merely slow, still-live holder
+   * get its lock stolen out from under it); and any acquisition failure —
+   * timeout, or the lock write itself failing for a reason other than
+   * contention (EACCES, EROFS, an unsupported operation) — falls through
+   * to running the critical section unlocked rather than throwing or
+   * waiting indefinitely. Unlocked is not unsafe here: commit()'s own
+   * compare-and-swap still applies, so a save that runs unlocked is exposed
+   * only to the one microscopic race this lock exists to close, not to the
+   * much larger one the version check already closes on its own.
    */
   private withLock<T>(file: string, run: () => T): T {
     const lockPath = `${file}.lock`
@@ -140,7 +142,10 @@ export class FileStateStore implements StateStore {
 
     do {
       try {
-        fs.closeSync(fs.openSync(lockPath, "wx"))
+        // Atomic create-and-write: the pid is what lets a later, stalled
+        // acquire attempt distinguish an abandoned lock from a merely slow
+        // one (see reclaimIfStale below), instead of guessing by age alone.
+        fs.writeFileSync(lockPath, String(process.pid), { flag: "wx" })
         locked = true
       } catch (err) {
         if (errorCode(err) !== "EEXIST") break // locking unavailable here — degrade now
@@ -158,18 +163,32 @@ export class FileStateStore implements StateStore {
   }
 
   /**
-   * A lock this old can only be a crashed holder's leftover: the critical
-   * section it guards is a handful of synchronous fs calls, never anywhere
-   * close to lockStaleMs. Reclaiming it is what stops a killed process from
-   * wedging every future save() for this session.
+   * Reclaims a lock only when BOTH hold: it is older than lockStaleMs, AND
+   * the pid recorded in it (at acquire time, above) no longer exists
+   * (`process.kill(pid, 0)` throws ESRCH). Age alone is not enough — a
+   * holder can be merely slow rather than dead (a disk stall, scheduler
+   * preemption, a throttled cgroup, all realistic under WSL2), and stealing
+   * a live holder's lock lets two commit() calls run concurrently, both
+   * reading the same pre-write value and both passing their own
+   * compare-and-swap: the exact lost update this lock exists to prevent,
+   * now masked by an apparently successful lock cycle instead of surfaced
+   * as a conflict. If the pid cannot be read or parsed, the lock is left
+   * alone rather than guessed at — that failure mode falls back to the
+   * bounded acquire timeout in withLock, which is what actually keeps this
+   * from wedging a session either way, not this staleness check.
    */
   private reclaimIfStale(lockPath: string): void {
     try {
       const age = Date.now() - fs.statSync(lockPath).mtimeMs
-      if (age > this.lockStaleMs) fs.rmSync(lockPath, { force: true })
+      if (age <= this.lockStaleMs) return
+
+      const holder = Number.parseInt(fs.readFileSync(lockPath, "utf8"), 10)
+      if (Number.isNaN(holder) || isProcessAlive(holder)) return
+
+      fs.rmSync(lockPath, { force: true })
     } catch {
       // Gone already, or unreadable — either way the next loop iteration's
-      // own openSync settles it.
+      // own open attempt settles it.
     }
   }
 
@@ -197,6 +216,21 @@ export class FileStateStore implements StateStore {
 /** Avoids depending on the ambient NodeJS.ErrnoException type. */
 function errorCode(err: unknown): string | undefined {
   return typeof err === "object" && err !== null && "code" in err ? String((err as { code: unknown }).code) : undefined
+}
+
+/**
+ * True if `pid` exists, or if it exists but signalling it is not permitted
+ * (a different user's process — still alive, just unconfirmable further).
+ * False only on a confirmed ESRCH: no such process. Signal 0 sends nothing;
+ * it only probes for existence and permission.
+ */
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return errorCode(err) !== "ESRCH"
+  }
 }
 
 /**

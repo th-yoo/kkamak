@@ -69,7 +69,20 @@ async function handleEvent(host: GateHost, event: GateEvent): Promise<GateDecisi
   }
 }
 
-/** Arming. A repo with no usable gate.json accumulates no state at all. */
+/**
+ * Arming. A repo with no usable gate.json accumulates no state at all.
+ *
+ * Audited (docs/known-issues.md #8): this persist's return is ignored on
+ * purpose, unlike onNewUserPrompt's reset. The payload only ever changes
+ * `edited` false→true, so losing the compare-and-swap against another
+ * concurrent file-edited write is harmless — that writer set the same
+ * field to the same value, so the flag ends up true either way. Losing it
+ * against a concurrent reset (accept/exhaust/interrupt) drops this one
+ * edit's `edited` mark, which under-gates rather than over-blocks — the
+ * same direction the file header's fail-open rule already calls for, and
+ * the same conclusion the original review already reached for this exact
+ * line ("a failed arm on file-edited simply leaves the gate disarmed").
+ */
 function onFileEdited(
   host: GateHost,
   sessionID: string,
@@ -129,7 +142,22 @@ function onNewUserPrompt(
     })
   }
 
-  persist(host, sessionID, { ...INITIAL_STATE }, state.updatedAt)
+  // Human preemption is unconditional intent: a new prompt means this cycle
+  // is over, full stop, whatever else raced against it. If the reset's own
+  // compare-and-swap loses — a concurrent stop-requested handler (a second
+  // process, or opencode's session.idle callback sharing this gate instance
+  // with chat.message) landed a block first, based on the same pre-prompt
+  // read — reload and retry once against whatever is actually on disk now.
+  // Silently giving up here would leave that block's round count behind for
+  // an unrelated later cycle to inherit: the exact "round already at budget,
+  // first failing check exhausts with zero blocks issued" symptom
+  // docs/known-issues.md #8 describes, reachable through this path too. One
+  // retry, not a loop — fail-open still governs, so a second lost race is
+  // left alone rather than chased further.
+  if (!persist(host, sessionID, { ...INITIAL_STATE }, state.updatedAt)) {
+    const fresh = host.state.load(sessionID)
+    persist(host, sessionID, { ...INITIAL_STATE }, fresh.updatedAt)
+  }
   return ALLOW
 }
 
@@ -262,6 +290,13 @@ function onInternalError(
   const errorStreak = state.errorStreak + 1
 
   if (errorStreak >= ERROR_STREAK_LIMIT) {
+    // Not audited to the same depth as the two persists below (out of scope
+    // for the docs/known-issues.md #8 review that covered them) but noted
+    // here since it is the same shape: a lost compare-and-swap on this
+    // INITIAL_STATE-spread reset leaves the session at whatever a
+    // concurrent writer left instead of disarmed, deferring the safety net
+    // by one more internal error rather than dropping it — worth a retry
+    // like onNewUserPrompt's if this gets a closer look, not fixed here.
     persist(host, sessionID, { ...INITIAL_STATE, errorStreak, disarmed: true }, state.updatedAt)
     return {
       kind: "allow",
@@ -271,6 +306,14 @@ function onInternalError(
     }
   }
 
+  // Audited (docs/known-issues.md #8): unlike onNewUserPrompt's reset, this
+  // persist's payload only increments errorStreak on top of whatever else
+  // `state` already carries — it does not undo a concurrent writer's real
+  // progress. Losing this compare-and-swap just means the increment is
+  // dropped; the next internal error re-reads the current (correct, if not
+  // this one's) errorStreak and increments from there, so disarm-after-3 is
+  // delayed by at most one extra error, never skipped or corrupted the way
+  // a lost reset would corrupt round accounting.
   return withPersist(host, sessionID, { ...state, errorStreak }, state.updatedAt, ALLOW)
 }
 
