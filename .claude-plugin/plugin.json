@@ -1,6 +1,6 @@
 {
   "name": "kkamak",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "kkamak completion gate — Claude Code cannot say done until your check passes",
   "author": {
     "name": "th-yoo"

@@ -27,6 +27,10 @@ at `aec746a` rather than the tag, per the clone behaviour above. `0.4.2` was
 run on 2026-08-12 against `main` at `c2ee18d`, the commit subsequently
 tagged, and passed every assertion including a live block
 (`gateExhausted: true`, two `verify-failed` rounds, `pluginVersion 0.4.2`).
+`0.5.0` has **not** been run: its assertions below were advanced from 0.4.2
+to 0.5.0 so the procedure targets the release it now describes, but no one
+has executed them against a real install yet. The two sentences above are
+history and were left at the versions actually run — do not advance them.
 
 ## 0. Why this whole procedure runs against an isolated config, not your real one
 
@@ -105,7 +109,7 @@ dir from an earlier run, for instance):
 ls -d "$CLAUDE_CONFIG_DIR/plugins/cache/kkamak/kkamak/"*/
 ```
 
-This must print exactly one path, ending in `/0.4.2/`.
+This must print exactly one path, ending in `/0.5.0/`.
 
 Confirm the files this release adds are present in that one version
 directory (these are new in `0.4.0`; their absence would mean the cache
@@ -227,7 +231,7 @@ list two `"verify-failed"` entries. `"accepted"` will read `true` here too —
 that field means "the stop was ultimately allowed through" (exhaustion always
 ends by allowing the stop), not "the check passed"; no code path ever writes
 `"accepted": false`, so it is not useful as a failure signal on its own.
-`"pluginVersion"` must read `"0.4.2"` — that field is the durable proof that
+`"pluginVersion"` must read `"0.5.0"` — that field is the durable proof that
 the session ran the copy this release installed, not a leftover older one.
 
 ## 4. Cleanup
@@ -382,7 +386,7 @@ podman exec -e PATH="$CPATH" "$NAME" cat /root/kkamak-check/.km/gate-outcomes.nd
 ```
 
 `gateExhausted: true`, `rounds` listing two `"verify-failed"` entries,
-`pluginVersion: "0.4.2"`.
+`pluginVersion: "0.5.0"`.
 
 **Cleanup — shred the credential export, then remove the container:**
 
