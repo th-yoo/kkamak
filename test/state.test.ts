@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { INITIAL_STATE, isGateState, isInitialState, normalizeGateState } from "../src/kernel/state.ts"
+import {
+  INITIAL_STATE,
+  isGateState,
+  isInitialState,
+  normalizeGateState,
+  TOUCHED_PATHS_CAP,
+} from "../src/kernel/state.ts"
 import type { GateState } from "../src/kernel/ports.ts"
 
 describe("INITIAL_STATE", () => {
@@ -14,6 +20,8 @@ describe("INITIAL_STATE", () => {
       cycleStartedAt: 0,
       errorStreak: 0,
       disarmed: false,
+      touchedPaths: [],
+      touchedTruncated: false,
       updatedAt: 0,
     })
   })
@@ -104,4 +112,52 @@ test("normalising copies the arrays, so a loaded record cannot alias state", () 
   const copy = normalizeGateState(source)
   expect(copy.outcomes).not.toBe(source.outcomes)
   expect(copy.checkMs).not.toBe(source.checkMs)
+})
+
+// A1: the cycle's touched paths, bounded — see TOUCHED_PATHS_CAP.
+describe("touched paths (A1 cycle tagging)", () => {
+  test("initial state has no touched paths and is not truncated", () => {
+    expect(INITIAL_STATE.touchedPaths).toEqual([])
+    expect(INITIAL_STATE.touchedTruncated).toBe(false)
+    expect(isInitialState({ ...INITIAL_STATE })).toBe(true)
+  })
+
+  test("touched paths mean the state is not initial", () => {
+    expect(isInitialState({ ...INITIAL_STATE, touchedPaths: ["src/a.ts"] })).toBe(false)
+  })
+
+  test("a truncation mark alone means the state is not initial", () => {
+    expect(isInitialState({ ...INITIAL_STATE, touchedTruncated: true })).toBe(false)
+  })
+
+  test("a record written before these fields existed is still valid, not corrupt", () => {
+    const legacy: Record<string, unknown> = { ...INITIAL_STATE, edited: true }
+    delete legacy.touchedPaths
+    delete legacy.touchedTruncated
+    expect(isGateState(legacy)).toBe(true)
+    const normalized = normalizeGateState(legacy as unknown as GateState)
+    expect(normalized.touchedPaths).toEqual([])
+    expect(normalized.touchedTruncated).toBe(false)
+    expect(normalized.edited).toBe(true)
+  })
+
+  test("a non-string touchedPaths entry is corrupt", () => {
+    expect(isGateState({ ...INITIAL_STATE, touchedPaths: [1] })).toBe(false)
+    expect(isGateState({ ...INITIAL_STATE, touchedPaths: "src/a.ts" })).toBe(false)
+  })
+
+  test("a non-boolean touchedTruncated is corrupt", () => {
+    expect(isGateState({ ...INITIAL_STATE, touchedTruncated: "yes" })).toBe(false)
+  })
+
+  test("normalising copies touchedPaths, so a loaded record cannot alias state", () => {
+    const source = { ...INITIAL_STATE, touchedPaths: ["src/a.ts"] }
+    const copy = normalizeGateState(source)
+    expect(copy.touchedPaths).not.toBe(source.touchedPaths)
+    expect(copy.touchedPaths).toEqual(["src/a.ts"])
+  })
+
+  test("the cap is around 200", () => {
+    expect(TOUCHED_PATHS_CAP).toBe(200)
+  })
 })

@@ -433,3 +433,51 @@ cycle as before. That is strictly better than 0.4.2 and strictly worse than
 being told. Both `README.md` and `CHANGELOG.md` were corrected to describe the
 clamp as silent protection rather than as a warning, so the docs do not
 promise a message that never arrives.
+
+## 11. A1 widened an unaudited gap in #8's own CAS coverage: `onStopRequested`'s accept/exhaust resets never checked `persist()`'s return — RESOLVED
+
+Flagged by an independent architect review, 2026-08-12, while reviewing A1
+(cycle tagging). #8's audit above enumerated every place `persist`/
+`withPersist`'s return went unchecked in `gate.ts` and reasoned about each —
+but `onStopRequested`'s own two unconditional resets (the accept path and the
+exhausted path, both `persist(host, sessionID, { ...INITIAL_STATE }, ...)`)
+were not among them. Not "left as-is" by a documented judgement, like
+`onFileEdited`'s arm write — simply missed.
+
+Pre-A1 this was hard to hit: `onFileEdited` persisted once, at a cycle's
+first edit, then went silent for the rest of the cycle (`state.edited` was
+already `true`), so there was effectively nothing left to race against these
+two resets during `onStopRequested`'s `await host.check.run(...)` window.
+A1's `accumulateTouchedPath` changes that — `onFileEdited` now persists on
+every edit that adds a new distinct touched path, for the whole cycle, not
+just the first — which reopens that window for the full duration of the
+check. A concurrent `file-edited` write landing in it can win the race and
+leave these resets' own compare-and-swap stale.
+
+Because these two resets ignored `persist()`'s return, a lost race here was
+silent: the decision returned to this turn was already correct (computed and
+recorded before the reset attempt, same as the block branch's own accept/
+reject-of-persist pattern), but on-disk `gating`/`round` stayed at whatever
+the concurrent writer left — the same "round already at budget, first
+failing check exhausts with zero blocks issued" symptom class #8 exists to
+prevent, reachable here through a path #8 never covered.
+
+**Resolved**, alongside a third, adjacent gap the same review surfaced:
+`onInternalError`'s disarm-after-3-errors reset was already flagged in its
+own doc comment as "worth a retry like `onNewUserPrompt`'s if this gets a
+closer look, not fixed here" (see #8's own audit list above) — that closer
+look happened here. All three — the two `onStopRequested` resets and
+`onInternalError`'s disarm — now share one `resetWithRetry` helper
+(`gate.ts`) implementing the identical one-retry-on-CAS-loss pattern
+`onNewUserPrompt`'s reset already used (`onNewUserPrompt` was refactored onto
+the same helper rather than kept as a fourth, slightly different copy).
+Regression tests (`test/gate.test.ts`) cover a lost race for each of the
+three, injected the same way the pre-existing `onNewUserPrompt` race test
+was: a scripted concurrent write during the check runner's execution.
+
+Not touched: the config-vanished-mid-cycle reset (`onStopRequested`, config
+parses to `undefined` while `state.gating`) keeps `edited` rather than doing
+a pure `INITIAL_STATE` reset, and its race window is the same narrow,
+un-widened one it always had (no `await` sits between the state load and
+this particular persist) — out of scope for what this review actually
+found, not a judgement that it is race-free.

@@ -6,6 +6,7 @@ import {
   DEFAULT_SENSOR_PATH,
   parseGateConfig,
 } from "../src/kernel/config.ts"
+import { DEFAULT_TEST_PATH_PATTERN } from "../src/kernel/classify.ts"
 
 describe("parseGateConfig", () => {
   test("parses a minimal config and fills defaults", () => {
@@ -16,6 +17,7 @@ describe("parseGateConfig", () => {
       sensor: DEFAULT_SENSOR_PATH,
       checkTimeoutMs: DEFAULT_CHECK_TIMEOUT_MS,
       marker: DEFAULT_MARKER,
+      testPathPattern: DEFAULT_TEST_PATH_PATTERN,
     })
   })
 
@@ -28,7 +30,7 @@ describe("parseGateConfig", () => {
 
   test("honours every explicit field", () => {
     const cfg = parseGateConfig(
-      '{"check":"npm test","rounds":5,"sensor":"logs/x.ndjson","checkTimeoutMs":1000,"marker":true}',
+      '{"check":"npm test","rounds":5,"sensor":"logs/x.ndjson","checkTimeoutMs":1000,"marker":true,"testPathPattern":"(^|/)checks(/|$)"}',
     )
     expect(cfg).toEqual({
       check: "npm test",
@@ -36,6 +38,7 @@ describe("parseGateConfig", () => {
       sensor: "logs/x.ndjson",
       checkTimeoutMs: 1000,
       marker: true,
+      testPathPattern: "(^|/)checks(/|$)",
     })
   })
 
@@ -105,5 +108,28 @@ describe("parseGateConfig", () => {
 
   test("trims the check command", () => {
     expect(parseGateConfig('{"check":"  bun test  "}')?.check).toBe("bun test")
+  })
+
+  // A1: heuristic test-path classifier pattern. Same never-throw discipline
+  // as every other field here — a malformed value falls back to the default
+  // rather than disabling the gate.
+  describe("testPathPattern", () => {
+    test("defaults to DEFAULT_TEST_PATH_PATTERN when absent", () => {
+      expect(parseGateConfig('{"check":"x"}')?.testPathPattern).toBe(DEFAULT_TEST_PATH_PATTERN)
+    })
+
+    test("honours an explicit valid pattern", () => {
+      expect(parseGateConfig('{"check":"x","testPathPattern":"(^|/)checks(/|$)"}')?.testPathPattern).toBe(
+        "(^|/)checks(/|$)",
+      )
+    })
+
+    test.each([
+      ["non-string", '{"check":"x","testPathPattern":7}'],
+      ["uncompilable regex source", '{"check":"x","testPathPattern":"(["}'],
+      ["empty string", '{"check":"x","testPathPattern":""}'],
+    ])("falls back to the default for %s", (_label, raw) => {
+      expect(parseGateConfig(raw)?.testPathPattern).toBe(DEFAULT_TEST_PATH_PATTERN)
+    })
   })
 })

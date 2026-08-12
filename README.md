@@ -60,6 +60,7 @@ Keep the check cheap. It runs every time the agent tries to finish a turn in whi
 | `sensor`         | no       | `.km/gate-outcomes.ndjson`   | Where outcome lines are appended, relative to the directory Claude Code was launched from (the same directory `gate.json` is read from). |
 | `checkTimeoutMs` | no       | `300000` (5 minutes)         | Hard cap on one check run; a check that runs past this is killed and counted as a failed round. |
 | `marker`         | no       | `false`                      | If `true`, a clean accept (not a block, not an exhausted give-up) also returns a hygiene notice — advisory text saying this cycle's check evidence is closed and should not be carried into unrelated work. Same-cycle only; nothing is persisted across sessions. |
+| `testPathPattern` | no      | matches `test`/`tests`/`spec`/`specs`/`__tests__` conventions | Regex source (case-insensitive) used only to derive the sensor file's `implOnly`/`sameTurnCoEdit` telemetry below — a heuristic that never affects a block/allow decision. A pattern that fails to compile falls back to the default rather than disabling the gate. |
 
 Keep `checkTimeoutMs` under 600000 (600s): the `Stop` hook in `hooks/hooks.json` has its own 600s timeout, and if that fires first, Claude Code kills the hook process before the gate records a decision — fail-open still holds (no state written, no round consumed), but the check silently never gets its full configured time.
 
@@ -114,6 +115,8 @@ Fields:
 - `checkMs` *(optional)* — per-round check execution time only, parallel to `rounds`. `durationMs` alone can't tell you what the check itself costs: an observed 420-second cycle contained a ~1-second check.
 - `skippedStop` *(optional)* — present and `true` only on a diagnostic line: a queued user message consumed a turn boundary before a stop was ever delivered, so no check ran and `rounds` is empty. The session stays armed, so the next real stop still measures the accumulated edits. Without this field, that session would look identical to one with no edits at all.
 - `forced` *(optional)* — true iff an env override forced this session's reinject arm. The downstream consumer's frozen contract scopes this to `KKAMAK_REINJECT`; this kernel has no reinject-arm mechanism at all, so it never sets this field today.
+- `implOnly` *(optional)* — true iff the cycle touched source files and no test files, by the `testPathPattern` heuristic above. Absent, not `false`, whenever the touched set can't be trusted to answer the question: no paths reported at all (opencode; a line written before this field existed) or the set was truncated (see `sameTurnCoEdit`). Never present on a `skippedStop` diagnostic line, since that cycle hasn't actually finished.
+- `sameTurnCoEdit` *(optional)* — true iff the cycle touched both source and test files in the same turn — implementation and its tests authored together. Same absence rules as `implOnly`; the two are computed together from the same touched-path set and are never both `true`.
 
 All optional fields may be absent from any given line; a consumer must tolerate that.
 
