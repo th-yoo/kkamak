@@ -137,6 +137,24 @@ function assertConformsToSensorContract(line: Record<string, unknown>): void {
   expect(typeof line.product).toBe("string")
   expect(line.product).toBe(KERNEL_PRODUCT)
   expect(typeof line.roundsMax).toBe("number")
+
+  // a3 contract rev (meta-harness, 2026-08-13): OPTIONAL shadow rule-check
+  // outcomes. This kernel never emits the field (the evaluator lives in
+  // cc-gate-plugin's hook path), but a conforming line that carries it must
+  // hold outcome shapes only — {id, pass, ms} | {id, skipped} | {id,
+  // refused} — and NEVER command text (F2: cmd is banned from the wire).
+  if ("ruleChecks" in line) {
+    expect(Array.isArray(line.ruleChecks)).toBe(true)
+    for (const rc of line.ruleChecks as Array<Record<string, unknown>>) {
+      expect(typeof rc.id).toBe("string")
+      expect(rc).not.toHaveProperty("cmd")
+      const shapeOk =
+        (typeof rc.pass === "boolean" && typeof rc.ms === "number") ||
+        rc.skipped === true ||
+        rc.refused === true
+      expect(shapeOk).toBe(true)
+    }
+  }
 }
 
 describe("sensor contract: driven-kernel emission conforms to the frozen SensorLine", () => {
@@ -248,7 +266,7 @@ describe("sensor contract: golden vector fixture", () => {
   test("every fixture line is well-formed JSON conforming to the required-field schema", () => {
     const text = readFileSync(FIXTURE, "utf-8")
     const lines = text.split("\n").filter((l) => l.length > 0)
-    expect(lines).toHaveLength(4)
+    expect(lines).toHaveLength(5)
     for (const raw of lines) {
       const parsed = JSON.parse(raw) as Record<string, unknown>
       for (const field of REQUIRED_FIELDS) {
@@ -285,7 +303,7 @@ describe("sensor contract: golden vector fixture", () => {
       return
     }
     const src = readFileSync(counterpart, "utf-8")
-    const names = ["CLEAN_ACCEPT", "CATCH_BLOCK_THEN_FIX", "EXHAUSTED", "SKIPPED_STOP_DIAGNOSTIC"]
+    const names = ["CLEAN_ACCEPT", "CATCH_BLOCK_THEN_FIX", "EXHAUSTED", "SKIPPED_STOP_DIAGNOSTIC", "CLEAN_ACCEPT_WITH_RULE_CHECKS"]
     const lines = locateVectorLines(src, names)
     const theirs = lines.join("\n") + "\n"
     const ours = readFileSync(FIXTURE, "utf-8")
