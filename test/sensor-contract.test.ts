@@ -266,7 +266,7 @@ describe("sensor contract: golden vector fixture", () => {
   test("every fixture line is well-formed JSON conforming to the required-field schema", () => {
     const text = readFileSync(FIXTURE, "utf-8")
     const lines = text.split("\n").filter((l) => l.length > 0)
-    expect(lines).toHaveLength(5)
+    expect(lines).toHaveLength(6)
     for (const raw of lines) {
       const parsed = JSON.parse(raw) as Record<string, unknown>
       for (const field of REQUIRED_FIELDS) {
@@ -303,7 +303,7 @@ describe("sensor contract: golden vector fixture", () => {
       return
     }
     const src = readFileSync(counterpart, "utf-8")
-    const names = ["CLEAN_ACCEPT", "CATCH_BLOCK_THEN_FIX", "EXHAUSTED", "SKIPPED_STOP_DIAGNOSTIC", "CLEAN_ACCEPT_WITH_RULE_CHECKS"]
+    const names = ["CLEAN_ACCEPT", "CATCH_BLOCK_THEN_FIX", "EXHAUSTED", "SKIPPED_STOP_DIAGNOSTIC", "CLEAN_ACCEPT_WITH_RULE_CHECKS", "CLEAN_ACCEPT_WITH_HOOK_RULES"]
     const lines = locateVectorLines(src, names)
     const theirs = lines.join("\n") + "\n"
     const ours = readFileSync(FIXTURE, "utf-8")
