@@ -211,7 +211,40 @@ export interface SensorLine {
    * per-line-shape reasoning.
    */
   sameTurnCoEdit?: boolean
+  /**
+   * Shadow rule-check outcomes for this Stop (frozen contract a3 rev,
+   * 2026-08-13; cc-gate-plugin/src/types.ts `SensorLine.ruleChecks`).
+   * Outcomes only — never command text or check output. SHADOW: these never
+   * influenced the Stop decision on any producer. This kernel has no
+   * rule-check machinery and never emits the field; it is declared so a
+   * consumer typed against this kernel can see lines from producers that do
+   * (cc-gate-plugin >= 0.4.5) — same tolerated-absent convention as
+   * `forced`, adopted type-first here (golden vector 5,
+   * test/fixtures/sensor-contract.ndjson).
+   */
+  ruleChecks?: RuleCheckOutcome[]
+  /**
+   * Per-session PreToolUse hook-rule outcomes, aggregated at Stop (frozen
+   * contract P2 rev, 2026-08-15; cc-gate-plugin/src/types.ts
+   * `SensorLine.hookRules`). id/matched/mode/ms only — never input text.
+   * Absent when no rule matched the session; producer lines with
+   * pluginVersion >= 0.4.7 may carry it, earlier lines never do. This
+   * kernel has no hook-rule machinery and never emits the field — declared
+   * for consumer visibility only, same convention as `ruleChecks` above
+   * (golden vector 6).
+   */
+  hookRules?: { id: string; matched: boolean; mode: string; ms: number }[]
 }
+
+/**
+ * Outcome of one shadow rule check (frozen contract a3 rev — the shape is
+ * owned by cc-gate-plugin/src/types.ts `RuleCheckOutcome` and mirrored here
+ * verbatim). Skips and refusals are visible states, not silence.
+ */
+export type RuleCheckOutcome =
+  | { id: string; pass: boolean; ms: number }
+  | { id: string; skipped: true }
+  | { id: string; refused: true }
 
 // ── Events in ───────────────────────────────────────────────────────────────
 //

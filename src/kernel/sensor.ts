@@ -54,6 +54,13 @@ export const OPTIONAL_SENSOR_FIELDS = [
   "roundsMax",
   "implOnly",
   "sameTurnCoEdit",
+  // Contract-mirror fields (a3 / P2 revs): declared on SensorLine for
+  // consumer visibility of cc-gate-plugin-produced lines; this kernel has no
+  // rule-check or hook-rule machinery and never emits either — same
+  // never-set-here convention as `forced`. See their doc comments in
+  // ports.ts.
+  "ruleChecks",
+  "hookRules",
 ] as const satisfies readonly (keyof SensorLine)[]
 
 export interface SensorArgs {

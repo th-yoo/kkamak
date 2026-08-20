@@ -36,7 +36,7 @@ import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 import { createGate } from "../src/kernel/gate.ts"
 import { KERNEL_PRODUCT, KERNEL_VERSION } from "../src/kernel/sensor.ts"
-import type { RoundOutcome } from "../src/kernel/ports.ts"
+import type { RoundOutcome, RuleCheckOutcome, SensorLine } from "../src/kernel/ports.ts"
 import { FAIL, FakeClock, makeHarness, PASS } from "./fakes.ts"
 
 const REQUIRED_FIELDS = [
@@ -277,6 +277,23 @@ describe("sensor contract: golden vector fixture", () => {
         expect(ROUND_VOCAB).toContain(round as RoundOutcome)
       }
     }
+  })
+
+  // The whole point of declaring the contract-mirror fields on SensorLine
+  // (ruleChecks / hookRules — producer: cc-gate-plugin >= 0.4.5 / 0.4.7): a
+  // consumer typed against THIS kernel can read producer lines without
+  // casting. Vectors 5 and 6 are those producer lines; the typed accesses
+  // below fail to COMPILE, not just to run, if the fields fall off the type.
+  test("SensorLine (typed) admits the vector-5/6 contract-mirror fields", () => {
+    const text = readFileSync(FIXTURE, "utf-8")
+    const lines = text.split("\n").filter((l) => l.length > 0)
+    const withRuleChecks = JSON.parse(lines[4]!) as SensorLine
+    const withHookRules = JSON.parse(lines[5]!) as SensorLine
+    expect(Array.isArray(withRuleChecks.ruleChecks)).toBe(true)
+    const first: RuleCheckOutcome = withRuleChecks.ruleChecks![0]!
+    expect(first.id).toBe("no-any")
+    expect(withHookRules.hookRules![0]!.matched).toBe(true)
+    expect(withHookRules.hookRules![0]!.mode).toBe("shadow")
   })
 
   // Advisory, mirroring the check meta-harness's own parity test does in the

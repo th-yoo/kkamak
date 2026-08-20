@@ -151,19 +151,21 @@ describe("buildSensorLine", () => {
 })
 
 describe("additive fields", () => {
-  test("declares the six optional fields", () => {
+  test("declares the eight optional fields", () => {
     expect([...OPTIONAL_SENSOR_FIELDS].sort()).toEqual([
       "checkMs",
       "forced",
+      "hookRules",
       "implOnly",
       "roundsMax",
+      "ruleChecks",
       "sameTurnCoEdit",
       "skippedStop",
     ])
   })
 
   // Existing consumers must not have to learn a new field to keep working.
-  test("omits all six when not supplied, so an ordinary line is unchanged", () => {
+  test("omits all eight when not supplied, so an ordinary line is unchanged", () => {
     const line = buildSensorLine(info, clock, { ...base, rounds: [...base.rounds] })
     expect(Object.keys(line).sort()).toEqual([...SENSOR_FIELDS].sort())
     expect("checkMs" in line).toBe(false)
@@ -172,6 +174,12 @@ describe("additive fields", () => {
     expect("roundsMax" in line).toBe(false)
     expect("implOnly" in line).toBe(false)
     expect("sameTurnCoEdit" in line).toBe(false)
+    // Contract-mirror fields: this kernel never emits them at all — there is
+    // no SensorArgs input that could produce either (unlike `forced`, which
+    // is plumbed for a future feature). Presence here would mean the builder
+    // invented data.
+    expect("ruleChecks" in line).toBe(false)
+    expect("hookRules" in line).toBe(false)
   })
 
   // A2: the budget the cycle was measured against. Without it, two windows
