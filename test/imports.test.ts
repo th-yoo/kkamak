@@ -8,6 +8,7 @@ import path from "node:path"
 
 const PACKAGE_ROOT = path.resolve(import.meta.dir, "..")
 const KERNEL_DIR = path.join(PACKAGE_ROOT, "src", "kernel")
+const SKILLS_DIR = path.join(PACKAGE_ROOT, "skills")
 
 /** Specifiers guaranteed to resolve at runtime without being copied along. */
 const ALLOWED_BARE = [/^node:/, /^bun:test$/, /^bun$/]
@@ -80,6 +81,7 @@ export const COMPUTED_CALL_PATTERN =
 const allSources = [
   ...sourceFiles(path.join(PACKAGE_ROOT, "src")),
   ...sourceFiles(path.join(PACKAGE_ROOT, "test")),
+  ...(fs.existsSync(SKILLS_DIR) ? sourceFiles(SKILLS_DIR) : []),
 ]
 const allImports = allSources.flatMap(importsIn)
 const kernelSources = sourceFiles(KERNEL_DIR)
@@ -168,6 +170,33 @@ describe("kernel purity", () => {
       }
     }
     expect(offenders).toEqual([])
+  })
+})
+
+describe("skills isolation", () => {
+  const guardedSources = [
+    ...sourceFiles(path.join(PACKAGE_ROOT, "src", "kernel")),
+    ...sourceFiles(path.join(PACKAGE_ROOT, "src", "adapters")),
+    ...sourceFiles(path.join(PACKAGE_ROOT, "src", "runtime")),
+  ]
+
+  test("kernel, adapters and runtime import nothing from skills/", () => {
+    const offenders = guardedSources
+      .flatMap(importsIn)
+      .filter(({ specifier }) => isRelative(specifier))
+      .map(({ file, specifier }) => ({ file, resolved: path.resolve(path.dirname(file), specifier) }))
+      .filter(({ resolved }) => resolved === SKILLS_DIR || resolved.startsWith(SKILLS_DIR + path.sep))
+      .map(({ file }) => rel(file))
+
+    expect(offenders).toEqual([])
+  })
+
+  // Built, not assumed: prove the guard actually flags a violation before
+  // trusting the empty-offenders result above.
+  test("the guard would catch a real violation", () => {
+    const fakeFrom = path.join(PACKAGE_ROOT, "src", "kernel", "gate.ts")
+    const resolved = path.resolve(path.dirname(fakeFrom), "../../skills/oneshot/run-once.ts")
+    expect(resolved === SKILLS_DIR || resolved.startsWith(SKILLS_DIR + path.sep)).toBe(true)
   })
 })
 
