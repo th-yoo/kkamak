@@ -2,6 +2,7 @@
 // the `claude` CLI headlessly per call: no daemon, no SDK, no keep-alive.
 // Registers under CLI_SPAWN_PROVIDER_ID; the extensions registry itself
 // stays empty until a later task actually wires gauge in.
+import { registerProvider } from "../send-prompt.ts"
 import type { SendOutcome, SendPromptOptions, SendPromptProvider } from "../send-prompt.ts"
 
 const DEFAULT_TIMEOUT_MS = 60_000
@@ -128,3 +129,18 @@ export const CLI_SPAWN_PROVIDER_ID = "cli-spawn"
 
 /** Production provider, bound to the real "claude" binary off PATH. */
 export const cliSpawnProvider: SendPromptProvider = makeCliSpawnProvider()
+
+// Self-registration at import time (round-3 review, S1 Critical): the ONLY
+// caller of sendPrompt() with this provider id is refiner-cli.ts, run as a
+// DETACHED CHILD PROCESS (spawn.ts's `bun refiner-cli.ts ...`) — a separate
+// module graph and a separate send-prompt.ts registry Map from whatever
+// process registered a provider. gauge/index.ts's own former
+// `registerProvider(CLI_SPAWN_PROVIDER_ID, cliSpawnProvider)` call ran only
+// in the hook process, which never calls sendPrompt itself — dead
+// registration, invisible to import-graph reasoning the same way R14's
+// refiner.ts exclusion was: the edge that actually matters is a spawn edge,
+// not an import edge. Registering here means every module that needs this
+// id (refiner-cli.ts, and gauge/index.ts, transitively, for whichever
+// process happens to import this file) gets it for free on import, with no
+// caller needing to remember a separate registration step.
+registerProvider(CLI_SPAWN_PROVIDER_ID, cliSpawnProvider)

@@ -61,14 +61,12 @@ import { shadowEvaluateAtStop } from "./shadow.ts"
 import { maybeSpawnGauge } from "./spawn.ts"
 import { gaugeDir, pickPending } from "./files.ts"
 import type { GaugedSensorLine } from "./types.ts"
-import { registerProvider } from "./send-prompt.ts"
-import { cliSpawnProvider, CLI_SPAWN_PROVIDER_ID } from "./providers/cli-spawn.ts"
-
-// kkamak's default send-prompt provider. Registered when this module is
-// loaded — under Q6's lazy-loading redesign (registry.ts), that is only
-// when "gauge" is actually an enabled name, not at every hook invocation's
-// static import time.
-registerProvider(CLI_SPAWN_PROVIDER_ID, cliSpawnProvider)
+// Round-3 review (S1 Critical): this file used to register cli-spawn's
+// provider itself, but the ONLY process that ever calls sendPrompt() is
+// refiner-cli.ts, spawned detached (spawn.ts) as its own process with its
+// own send-prompt.ts registry — a registration made HERE never reached it.
+// providers/cli-spawn.ts now self-registers on import instead, so nothing
+// in this file needs to import it just for that side effect.
 
 interface HeldLine {
   line: SensorLine
