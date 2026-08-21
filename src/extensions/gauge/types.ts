@@ -3,6 +3,7 @@
 // No kkamak core host exists for any of these; copied verbatim from
 // cc-gate-plugin/src/types.ts, additive per-file as the ported gauge files
 // demand them — never speculative.
+import type { SensorLine } from "../../kernel/ports.ts"
 
 /** km-gauge v2 classification (pre-reg §2.1/§2.2 extension, 2026-07-29 design). */
 export type GaugePromptClass = "A1" | "A2" | "B" | "C" | "D"
@@ -100,6 +101,28 @@ export interface WarmIsolation {
   tools: []
   title: string
   thinking: { type: "disabled" } | { type: "enabled" }
+}
+
+/** shadow.ts's working line type. kkamak's own SensorLine (kernel/ports.ts)
+ * has no `gauge` field at all (K2 divergence map's SensorLine MAP row:
+ * kkamak core deliberately omits it, the extension carries it instead).
+ * `gauge` is optional here specifically so a plain, unannotated SensorLine
+ * passthrough (shadowEvaluateAtStop's early-return branches) stays
+ * assignable without a cast — only shadow.ts's actual annotation paths
+ * populate it. */
+export type GaugedSensorLine = SensorLine & { gauge?: GaugeSensorField }
+
+/** spawn.ts's config dependency — mirrors the lab GateConfig.gauge/check
+ * fields maybeSpawnGauge actually reads. kkamak's kernel GateConfig has no
+ * `gauge` field (K2 divergence map's MAP-row ruling: enablement here is
+ * the K1 extensions mechanism, not a GateConfig boolean) — this local
+ * shape keeps maybeSpawnGauge's own internal `!cfg?.gauge` guard
+ * behaviorally identical to the lab rather than silently dropping it as
+ * dead code just because the K1 caller context already guarantees
+ * enablement by the time this would run. */
+export interface GaugeSpawnConfig {
+  check: string
+  gauge?: boolean
 }
 
 /** nudge.ts's config dependency. The lab types this as

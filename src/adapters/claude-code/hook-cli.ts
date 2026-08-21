@@ -31,7 +31,10 @@ async function main(): Promise<void> {
   // termination, and honouring the flag would cap the gate at a single block
   // regardless of the configured `rounds`.
   const host = createNodeHost({ root: parsed.root, app: APP, stopTimeoutMs: STOP_HOOK_TIMEOUT_MS })
-  const ext = await loadActiveExtensions(host)
+  const ext = await loadActiveExtensions(host, {
+    root: parsed.root,
+    ...(parsed.prompt ? { prompt: parsed.prompt } : {}),
+  })
   const gate = createGate(ext.wrapHost(host))
   const decision = await gate.handle(parsed.event)
   await ext.afterDecision(parsed.event, decision)

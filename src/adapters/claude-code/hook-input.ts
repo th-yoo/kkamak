@@ -27,6 +27,12 @@ export const STOP_HOOK_TIMEOUT_MS = 600_000
 export interface ParsedHookInput {
   event: GateEvent
   root: string
+  /** UserPromptSubmit's raw prompt text — absent on every other event, and
+   * absent (not undefined-but-present) when the payload lacks it or it's
+   * not a string. The kernel's own GateEvent never carries this; it exists
+   * only for adapters/extensions that need real prompt text (K4 ruling
+   * R12: gauge's maybeSpawnGauge). */
+  prompt?: string
 }
 
 /**
@@ -51,8 +57,14 @@ export function parseHookInput(raw: string, eventName: string): ParsedHookInput 
   switch (eventName) {
     case "Stop":
       return { event: { kind: "stop-requested", sessionID }, root }
-    case "UserPromptSubmit":
-      return { event: { kind: "new-user-prompt", sessionID }, root }
+    case "UserPromptSubmit": {
+      const prompt = record.prompt
+      return {
+        event: { kind: "new-user-prompt", sessionID },
+        root,
+        ...(typeof prompt === "string" && prompt ? { prompt } : {}),
+      }
+    }
     case "PostToolUse": {
       const tool = record.tool_name
       if (typeof tool !== "string") return undefined

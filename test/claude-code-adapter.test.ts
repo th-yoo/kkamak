@@ -23,6 +23,34 @@ describe("parseHookInput", () => {
     expect(parsed?.event.kind).toBe("new-user-prompt")
   })
 
+  // ExtensionContext (K4 ruling R12): the prompt text needed to fire
+  // maybeSpawnGauge for real lives in the raw UserPromptSubmit payload
+  // (record.prompt) — the kernel's own GateEvent never carries it, by
+  // design. Same never-throw, absent-on-anything-else discipline as root.
+  test("carries the prompt text through for UserPromptSubmit", () => {
+    const raw = payload({ hook_event_name: "UserPromptSubmit", prompt: "fix the parser" })
+    const parsed = parseHookInput(raw, "UserPromptSubmit")
+    expect(parsed?.prompt).toBe("fix the parser")
+  })
+
+  test("prompt is absent (not undefined-but-present) when the payload has no prompt field", () => {
+    const raw = payload({ hook_event_name: "UserPromptSubmit" })
+    const parsed = parseHookInput(raw, "UserPromptSubmit")
+    expect(parsed && "prompt" in parsed).toBe(false)
+  })
+
+  test("a non-string prompt field leaves prompt absent rather than passing through garbage", () => {
+    const raw = payload({ hook_event_name: "UserPromptSubmit", prompt: 42 })
+    const parsed = parseHookInput(raw, "UserPromptSubmit")
+    expect(parsed && "prompt" in parsed).toBe(false)
+  })
+
+  test.each(["Stop", "PostToolUse"])("prompt is never carried on %s, even if the raw payload has one", (event) => {
+    const raw = payload({ hook_event_name: event, tool_name: "Edit", prompt: "should be ignored" })
+    const parsed = parseHookInput(raw, event)
+    expect(parsed && "prompt" in parsed).toBe(false)
+  })
+
   // The config root is the payload's cwd verbatim — not the repo root, not
   // the process's cwd. See docs/known-issues.md #4 and README's gate.json
   // placement paragraph, which this pins.
@@ -170,7 +198,7 @@ describe("extension seam parity (K1, no extensions enabled)", () => {
 
     const decisionBefore = await createGate(before.host).handle({ kind: "stop-requested", sessionID: "s-1" })
 
-    const ext = await loadActiveExtensions(after.host)
+    const ext = await loadActiveExtensions(after.host, { root: "/repo" })
     const decisionAfter = await createGate(ext.wrapHost(after.host)).handle({
       kind: "stop-requested",
       sessionID: "s-1",
