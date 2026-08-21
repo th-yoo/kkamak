@@ -8,6 +8,7 @@
  */
 import { createGate } from "../../kernel/index.ts"
 import { createNodeHost } from "../../runtime/index.ts"
+import { loadActiveExtensions } from "../../extensions/registry.ts"
 import { planEmit } from "./emit.ts"
 import { parseHookInput, STOP_HOOK_TIMEOUT_MS } from "./hook-input.ts"
 
@@ -29,10 +30,12 @@ async function main(): Promise<void> {
   // ignore it — the kernel's own rounds budget is what guarantees
   // termination, and honouring the flag would cap the gate at a single block
   // regardless of the configured `rounds`.
-  const gate = createGate(
-    createNodeHost({ root: parsed.root, app: APP, stopTimeoutMs: STOP_HOOK_TIMEOUT_MS }),
-  )
-  const plan = planEmit(await gate.handle(parsed.event))
+  const host = createNodeHost({ root: parsed.root, app: APP, stopTimeoutMs: STOP_HOOK_TIMEOUT_MS })
+  const ext = await loadActiveExtensions(host)
+  const gate = createGate(ext.wrapHost(host))
+  const decision = await gate.handle(parsed.event)
+  await ext.afterDecision(parsed.event, decision)
+  const plan = planEmit(decision)
 
   if (plan.stdout) process.stdout.write(`${JSON.stringify(plan.stdout)}\n`)
   if (plan.stderr) process.stderr.write(plan.stderr)

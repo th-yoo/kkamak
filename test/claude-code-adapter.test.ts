@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { EDIT_TOOLS, HOOK_EVENTS, parseHookInput } from "../src/adapters/claude-code/hook-input.ts"
 import { planEmit } from "../src/adapters/claude-code/emit.ts"
+import { createGate } from "../src/kernel/index.ts"
+import { loadActiveExtensions } from "../src/extensions/registry.ts"
+import { makeHarness } from "./fakes.ts"
 
 const payload = (over: Record<string, unknown> = {}) =>
   JSON.stringify({ session_id: "s-1", cwd: "/repo", hook_event_name: "Stop", ...over })
@@ -142,5 +145,35 @@ describe("planEmit", () => {
   test("emits marker JSON that survives a round trip", () => {
     const plan = planEmit({ kind: "allow", marker: "x" })
     expect(() => JSON.parse(JSON.stringify(plan.stdout))).not.toThrow()
+  })
+})
+
+// K1: the extension seam wraps hook-cli.ts's gate construction. hook-cli.ts
+// itself has an unconditional top-level main() (no import.meta.main guard,
+// same as the rest of this file's own comments elsewhere note about it) so
+// it cannot be imported to compare byte-for-byte binary output. This proves
+// parity at the layer that can actually be tested directly: with no
+// extensions enabled, wrapping a host through loadActiveExtensions/wrapHost
+// and running afterDecision produces the identical GateDecision that
+// createGate(host) alone produced before this task — same config, same
+// script, two independent fake hosts so neither call's state consumption
+// affects the other's.
+describe("extension seam parity (K1, no extensions enabled)", () => {
+  test("a Stop payload's decision is identical with and without the seam wired in", async () => {
+    const opts = { raw: '{"check":"x"}', script: [{ code: 0, output: "ok\n" }] }
+    const before = makeHarness(opts)
+    const after = makeHarness(opts)
+
+    const decisionBefore = await createGate(before.host).handle({ kind: "stop-requested", sessionID: "s-1" })
+
+    const ext = await loadActiveExtensions(after.host)
+    const decisionAfter = await createGate(ext.wrapHost(after.host)).handle({
+      kind: "stop-requested",
+      sessionID: "s-1",
+    })
+    await ext.afterDecision({ kind: "stop-requested", sessionID: "s-1" }, decisionAfter)
+
+    expect(decisionAfter).toEqual(decisionBefore)
+    expect(planEmit(decisionAfter)).toEqual(planEmit(decisionBefore))
   })
 })

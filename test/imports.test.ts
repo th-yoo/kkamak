@@ -9,6 +9,7 @@ import path from "node:path"
 const PACKAGE_ROOT = path.resolve(import.meta.dir, "..")
 const KERNEL_DIR = path.join(PACKAGE_ROOT, "src", "kernel")
 const SKILLS_DIR = path.join(PACKAGE_ROOT, "skills")
+const EXTENSIONS_DIR = path.join(PACKAGE_ROOT, "src", "extensions")
 
 /** Specifiers guaranteed to resolve at runtime without being copied along. */
 const ALLOWED_BARE = [/^node:/, /^bun:test$/, /^bun$/]
@@ -197,6 +198,49 @@ describe("skills isolation", () => {
     const fakeFrom = path.join(PACKAGE_ROOT, "src", "kernel", "gate.ts")
     const resolved = path.resolve(path.dirname(fakeFrom), "../../skills/oneshot/run-once.ts")
     expect(resolved === SKILLS_DIR || resolved.startsWith(SKILLS_DIR + path.sep)).toBe(true)
+  })
+})
+
+describe("extensions isolation", () => {
+  test("kernel imports nothing from extensions/", () => {
+    const offenders = sourceFiles(KERNEL_DIR)
+      .flatMap(importsIn)
+      .filter(({ specifier }) => isRelative(specifier))
+      .map(({ file, specifier }) => ({ file, resolved: path.resolve(path.dirname(file), specifier) }))
+      .filter(({ resolved }) => resolved === EXTENSIONS_DIR || resolved.startsWith(EXTENSIONS_DIR + path.sep))
+      .map(({ file }) => rel(file))
+
+    expect(offenders).toEqual([])
+  })
+
+  // adapters/ and runtime/ MAY depend on the extension seam's public
+  // surface (registry.ts) — hook-cli.ts wires it in — but never reach past
+  // it into extensions/config.ts or any future internal module there.
+  test("adapters/ and runtime/ import from extensions/ only via a specifier ending extensions/registry.ts", () => {
+    const guarded = [
+      ...sourceFiles(path.join(PACKAGE_ROOT, "src", "adapters")),
+      ...sourceFiles(path.join(PACKAGE_ROOT, "src", "runtime")),
+    ]
+    const offenders = guarded
+      .flatMap(importsIn)
+      .filter(({ specifier }) => isRelative(specifier))
+      .map(({ file, specifier }) => ({ file, specifier, resolved: path.resolve(path.dirname(file), specifier) }))
+      .filter(({ resolved }) => resolved === EXTENSIONS_DIR || resolved.startsWith(EXTENSIONS_DIR + path.sep))
+      .filter(({ specifier }) => !specifier.endsWith("extensions/registry.ts"))
+      .map(({ file, specifier }) => `${rel(file)} -> ${specifier}`)
+
+    expect(offenders).toEqual([])
+  })
+
+  // Built, not assumed: prove the guard actually flags a violation before
+  // trusting the empty-offenders results above. kernel/'s rule has no
+  // registry.ts exception, unlike adapters/runtime's — so even the
+  // "allowed elsewhere" specifier must still be flagged when it comes from
+  // kernel/.
+  test("the guard would catch a real violation", () => {
+    const fakeFrom = path.join(PACKAGE_ROOT, "src", "kernel", "gate.ts")
+    const resolved = path.resolve(path.dirname(fakeFrom), "../extensions/registry.ts")
+    expect(resolved === EXTENSIONS_DIR || resolved.startsWith(EXTENSIONS_DIR + path.sep)).toBe(true)
   })
 })
 
