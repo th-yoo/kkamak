@@ -55,6 +55,43 @@ proves the tree installs and blocks, the post-merge pass proves the clone
 path actually delivers that tree. The pre-merge pass is what found
 `docs/known-issues.md` #10.
 
+`0.8.0` was run on 2026-08-21 against `main` at `25f6c4e`, the commit
+already tagged `v0.8.0` by the time this ran (an ordering exception to this
+file's own "verify before tagging" rule above — the tag was placed on
+`main`'s exact tip with no further commits landing after it, so the gap
+this rule guards against never opened; noted here rather than silently
+treated as routine). Host path (Linux, WSL2), not the container variant.
+Passed every assertion: exactly one `/0.8.0/` cache directory, both
+release files present, and a live block-then-exhaustion within a single
+`claude -p` turn (the agent retried automatically after the first block,
+without a manual follow-up prompt) whose sensor line read
+`gateExhausted: true`, two `"verify-failed"` rounds, `pluginVersion
+"0.8.0"`, `product "kkamak"`, `roundsMax 1`, `implOnly: true`,
+`sameTurnCoEdit: false`. The agent also declined, unprompted, to edit
+`gate.json` to force a pass — same gate-avoidance resistance the `0.6.0`
+run recorded.
+
+One real mistake made and corrected during this run, worth recording
+because it's a sharp edge in this exact procedure: `CLAUDE_CONFIG_DIR` was
+exported in one shell invocation, then referenced (`CLAUDE_CONFIG_DIR=
+"$CLAUDE_CONFIG_DIR"`) in a separate one without re-exporting first — an
+automation harness that doesn't persist shell state between commands
+silently turned that into `CLAUDE_CONFIG_DIR=""`, an empty string, not
+unset. `claude plugin marketplace add`/`install` then treated that as a
+literal relative path and wrote a live `plugins/` tree plus a stray
+`settings.json` into the current working directory — which happened to be
+this repo's own checkout, not `~/.claude`. Confirmed the real
+`~/.claude/plugins/{known_marketplaces,installed_plugins}.json` were
+untouched (unchanged mtimes) before proceeding. The stray files were
+untracked (`git status`), so removing them was safe; nothing valuable was
+lost. **Lesson for whoever automates this runbook**: an empty
+`CLAUDE_CONFIG_DIR` is not the same failure mode as an unset one and is not
+caught by "isolation means nothing on the real config changes" — verify
+the variable's value is actually the intended path, not just that it's
+"set" in some shell, before the first command that uses it; keep every
+step that reads `$CLAUDE_CONFIG_DIR` in the SAME shell invocation as the
+`export`, or re-derive it from a saved value at the top of each one.
+
 ## 0. Why this whole procedure runs against an isolated config, not your real one
 
 Every step below runs with `CLAUDE_CONFIG_DIR` pointed at a fresh temp
