@@ -23,7 +23,13 @@ export interface Extension {
   /**
    * Decorate the host (e.g. wrap host.sensor to annotate lines). MUST
    * return a host that behaves identically except for additive
-   * annotation.
+   * annotation. The one sanctioned exception (K4 ruling R13,
+   * hold-and-flush): a decorated host.sensor.append MAY withhold a line
+   * instead of forwarding it immediately, PROVIDED the implementor's own
+   * afterDecision flushes every withheld line to the real sink by the end
+   * of the SAME afterDecision call that follows this wrapHost's use, in
+   * the same process invocation — see ActiveExtensions.wrapHost's doc
+   * comment for the caller-facing guarantee this produces.
    */
   wrapHost(host: GateHost, ctx: ExtensionContext): GateHost
   /**

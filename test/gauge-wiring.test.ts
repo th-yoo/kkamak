@@ -293,3 +293,49 @@ describe("Q3 (High): a gauge-only Stop (no file edits) still runs shadow eval an
     expect(sensor.lines).toHaveLength(0)
   })
 })
+
+describe("N1: an interrupted held line with a pending derivation is offReason:no-record, never error", () => {
+  test("line.interrupted=true, a pending derivation exists → shadow.ts's own no-op branch fires; flushed as no-record (routine preemption, not a break)", async () => {
+    const repo = mkRepo()
+    pendingGauge(repo)
+    const { host, sensor } = makeHarness({ raw: '{"check":"true"}', script: [] })
+    const ctx: ExtensionContext = { root: repo }
+
+    const wrapped = gaugeExtension.wrapHost(host, ctx)
+    wrapped.sensor.append({ ...floorLine(), interrupted: true }, ".km/gate-outcomes.ndjson")
+    await gaugeExtension.afterDecision(STOP, ALLOW, host, ctx)
+
+    expect(sensor.lines).toHaveLength(1)
+    expect((sensor.lines[0] as { gauge?: Record<string, unknown> }).gauge).toEqual({
+      present: false,
+      offReason: "no-record",
+    })
+    // The pending derivation was deliberately left untouched for the next cycle.
+    expect(pickPending(gaugeDir(repo), "sid-1")).toBeDefined()
+  })
+})
+
+describe("N2: afterDecision idempotency — a second call on the same host (no new wrapHost) must not re-fabricate", () => {
+  test("a multi-turn-C pending stays byte-untouched after a gauge-only-Stop fabrication; a second afterDecision call on the same host appends nothing new", async () => {
+    const repo = mkRepo()
+    pendingGauge(repo, { class: "C", horizon: "multi-turn" })
+    const { host, sensor } = makeHarness({ raw: '{"check":"true"}', script: [] })
+    // Deliberately NOT arming state — a real no-edit, gauge-only Stop.
+    const ctx: ExtensionContext = { root: repo }
+
+    const wrapped = gaugeExtension.wrapHost(host, ctx)
+    const decision = await createGate(wrapped).handle(STOP)
+    expect(decision).toEqual({ kind: "allow" })
+
+    await gaugeExtension.afterDecision(STOP, decision, host, ctx)
+    expect(sensor.lines).toHaveLength(1) // fabricated once
+    // M6' fix (shadow.ts): an open multi-turn-C pending on a no-floor Stop
+    // is left byte-untouched, not consumed — the exact condition under
+    // which a length-only check would re-fabricate on every extra call.
+    expect(pickPending(gaugeDir(repo), "sid-1")).toBeDefined()
+
+    const linesBefore = sensor.lines.length
+    await gaugeExtension.afterDecision(STOP, decision, host, ctx) // no wrapHost in between
+    expect(sensor.lines.length).toBe(linesBefore)
+  })
+})

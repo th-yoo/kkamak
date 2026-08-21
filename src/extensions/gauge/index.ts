@@ -112,7 +112,15 @@ function safeAppend(host: GateHost, line: SensorLine, relativePath: string): voi
  * whether NOTHING was pending or something threw internally and its own
  * catch swallowed it); "error" for everything else that leaves a line
  * without a gauge field. NEVER throws itself: defense-in-depth, on top of
- * shadowEvaluateAtStop's own internal swallow. */
+ * shadowEvaluateAtStop's own internal swallow.
+ *
+ * N1 (round-2 review, Medium): an interrupted line (`line.interrupted`)
+ * is shadow.ts's OWN deliberate no-op branch (`if (sensor?.interrupted)
+ * return sensor`) — the user preempted the cycle and the pending gauge is
+ * kept for the next one on purpose. That is routine, the single most
+ * common benign no-gauge case, never "something broke" — even though a
+ * pending derivation existed beforehand. Checked before hadPendingBefore
+ * so it can't be misread as "error". */
 async function annotateLine(line: SensorLine, ctx: ExtensionContext, host: GateHost): Promise<SensorLine> {
   let hadPendingBefore: boolean
   try {
@@ -134,7 +142,8 @@ async function annotateLine(line: SensorLine, ctx: ExtensionContext, host: GateH
     const gauged = await shadowEvaluateAtStop(ctx.root, line.sessionID, cfg, line as GaugedSensorLine, runCheck, deps)
     const result: GaugedSensorLine = gauged ?? (line as GaugedSensorLine)
     if (!result.gauge) {
-      return stampGauge(result as SensorLine, hadPendingBefore ? "error" : "no-record")
+      const wasInterrupted = (result as SensorLine).interrupted === true
+      return stampGauge(result as SensorLine, !wasInterrupted && hadPendingBefore ? "error" : "no-record")
     }
     return result as SensorLine
   } catch {
@@ -202,6 +211,15 @@ async function afterDecision(
   host: GateHost,
   ctx: ExtensionContext,
 ): Promise<void> {
+  // N2 (round-2 review, Low): captured BEFORE the delete below, so a
+  // SECOND afterDecision call on the same host (no intervening wrapHost —
+  // shouldn't happen under the real hook-cli.ts lifecycle, but must not
+  // misbehave if it does) can tell "this cycle's extension never ran"
+  // apart from "already ran and flushed." pending.length === 0 alone
+  // can't make that distinction: a multi-turn-C pending that shadow.ts
+  // deliberately leaves byte-untouched (M6' fix, shadow.ts) would
+  // otherwise be re-fabricated on every extra call.
+  const hadHeldEntry = heldByHost.has(host)
   const pending = heldByHost.get(host) ?? []
   heldByHost.delete(host)
   const remaining = [...pending]
@@ -237,8 +255,10 @@ async function afterDecision(
 
   // Q3: nothing was held for this Stop (the kernel never called append at
   // all — a no-edit "gauge-only" Stop) — still run shadow eval, still give
-  // a pending derivation a chance to be consumed and measured.
-  if (event.kind === "stop-requested" && pending.length === 0) {
+  // a pending derivation a chance to be consumed and measured. hadHeldEntry
+  // gates this too (N2): a repeat afterDecision call on the same host,
+  // with no held-line entry left to find, does not re-run it.
+  if (event.kind === "stop-requested" && hadHeldEntry && pending.length === 0) {
     const fabricated = await fabricateIfPending(event.sessionID, ctx, host)
     if (fabricated) safeAppend(host, fabricated.line, fabricated.relativePath)
   }
