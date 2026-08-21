@@ -55,12 +55,21 @@ the existing one earlier, in-script, if it chooses to.
 ```
 skills/
   oneshot/
-    SKILL.md       trigger description + instructions: when to reach for oneshot, how to
-                    structure the script, how to read the structured result
-    run-once.ts     bun CLI: reads gate.json, runs its `check` once (reusing the existing
-                    SpawnCheckRunner + config-source, not reimplementing them), prints one JSON
-                    line { ok, output } to stdout, exits 0 on ok / 1 on not-ok
+    SKILL.md              trigger description + instructions: when to reach for oneshot, how to
+                           structure the script, how to read the structured result
+    run-once.ts            bun CLI: reads gate.json, runs its `check` once (reusing the existing
+                           SpawnCheckRunner + config-source, not reimplementing them), prints one
+                           JSON line { ok, output } to stdout, exits 0 on ok / 1 on not-ok, and
+                           appends the same line to .km/oneshot-dogfood.ndjson (Source 1, below)
+    dogfood-hook-cli.ts    new, separate PostToolUse hook target (matcher: Bash), added
+                           alongside — not replacing — the existing gate's PostToolUse entry;
+                           reads tool_input.command for oneshot's structural/call-boundary
+                           signals (Source 2, below)
 ```
+
+`hooks.json` gains one new array entry under `"PostToolUse"` pointing at `dogfood-hook-cli.ts`,
+matcher `"Bash"`. The existing `Edit|MultiEdit|Write|NotebookEdit` entry and everything it points
+to is untouched.
 
 `run-once.ts` imports from `runtime/` (read-only reuse of `SpawnCheckRunner` and the config
 reader). Nothing under `kernel/`, `adapters/`, or `runtime/` imports from `skills/` — one
@@ -157,8 +166,14 @@ verifies against:
 This is not the wrapper self-reporting a summary — it is a probe that fires whenever the helper
 actually runs, regardless of whether the wrapper "wants" to be honest about it.
 
-**Source 2 — the `PostToolUse` hook, extended to also match `Bash`** (currently
-`Edit|MultiEdit|Write|NotebookEdit` only), reading `tool_input.command` — a real, documented
+**Source 2 — a new, separate `PostToolUse` hook entry, matched on `Bash`**, added *alongside* the
+existing `Edit|MultiEdit|Write|NotebookEdit` entry in `hooks.json` — additive, not a modification
+to it. The existing gate's entry, `hook-cli.ts`/`hook-input.ts` and the matcher it uses, stays
+exactly as it is (the Scope line above still holds: no change to the existing gate). The new entry
+points at `skills/oneshot/dogfood-hook-cli.ts`, its own small script under the isolated `skills/`
+tree, so `Bash` calls only enter oneshot's observation path — they never touch the gate's own
+kernel/state machine, and a user who never uses `oneshot` pays nothing extra on every `Bash` call
+beyond one more no-op hook process. This script reads `tool_input.command` — a real, documented
 field — not to recover output, but to see the **command text itself**: a static count of how many
 times that one call's command invokes `run-once.ts` (does the script Claude wrote even attempt a
 retry loop, structurally), and, across consecutive `Bash` `PostToolUse` events in a session,
