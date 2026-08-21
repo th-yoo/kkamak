@@ -79,6 +79,29 @@ export interface GaugeDerivation {
   confidence: number
 }
 
+/** send-prompt.ts's isolation-profile shape.
+ *
+ * Origin: @th-yoo/cc-api-daemon's src/acp-wire.ts:203 (authoritative
+ * source, not inferred from usage — the package ships real .ts source in
+ * node_modules, readable directly). The lab's send-prompt.ts imports this
+ * `import type` only (never a value) specifically so the package's
+ * Anthropic-SDK-pulling value exports never enter the module graph — see
+ * that file's own extensive doc comment on why `type` there is
+ * load-bearing, not cosmetic. Copied verbatim; this port keeps the same
+ * type-only relationship (K3: "if any part of the portable core turns out
+ * to be VALUE-dependent on the daemon package, stop and report" — it
+ * isn't; the package is never imported here at all, type or value). */
+export interface WarmIsolation {
+  systemPrompt: string
+  settingSources: []
+  settings: { autoMemoryEnabled: false }
+  persistSession: false
+  strictMcpConfig: true
+  tools: []
+  title: string
+  thinking: { type: "disabled" } | { type: "enabled" }
+}
+
 /** nudge.ts's config dependency. The lab types this as
  * `Pick<GateConfig, "channelNudge">`, but kkamak's kernel GateConfig
  * (kernel/ports.ts) deliberately has no channelNudge field — the
