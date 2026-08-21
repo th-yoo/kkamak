@@ -1,6 +1,10 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import { EDIT_TOOLS, HOOK_EVENTS, parseHookInput } from "../src/adapters/claude-code/hook-input.ts"
 import { planEmit } from "../src/adapters/claude-code/emit.ts"
+import { composeBlockMessage } from "../src/adapters/shared/framing.ts"
 import { createGate } from "../src/kernel/index.ts"
 import { loadActiveExtensions } from "../src/extensions/registry.ts"
 import { makeHarness } from "./fakes.ts"
@@ -175,5 +179,71 @@ describe("extension seam parity (K1, no extensions enabled)", () => {
 
     expect(decisionAfter).toEqual(decisionBefore)
     expect(planEmit(decisionAfter)).toEqual(planEmit(decisionBefore))
+  })
+})
+
+// K1 review finding: the parity block above reimplements hook-cli.ts's call
+// sequence rather than executing the real file, so a literal wiring defect
+// (wrong arg, dropped await, wrong host passed to createGate) would not be
+// caught. This closes that gap by actually spawning hook-cli.ts as a
+// subprocess, same Bun.spawn + piped-stdin pattern
+// test/oneshot-dogfood-hook.test.ts already uses for a different CLI hook.
+describe("hook-cli.ts subprocess behavior (no extensions in gate.json)", () => {
+  const HOOK_CLI = path.join(import.meta.dir, "..", "src", "adapters", "claude-code", "hook-cli.ts")
+
+  let dir: string
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), "hook-cli-test-")) })
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }) })
+
+  async function runHook(
+    eventName: string,
+    payload: Record<string, unknown>,
+  ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+    const proc = Bun.spawn(["bun", HOOK_CLI, eventName], { cwd: dir, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
+    proc.stdin.write(JSON.stringify({ session_id: "s-1", cwd: dir, ...payload }))
+    proc.stdin.end()
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
+      new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
+      proc.exited,
+    ])
+    return { exitCode, stdout, stderr }
+  }
+
+  function writeGate(check: string, extra: Record<string, unknown> = {}): void {
+    fs.writeFileSync(path.join(dir, "gate.json"), JSON.stringify({ check, ...extra }))
+  }
+
+  // A bare Stop with no prior edit allows immediately without running the
+  // check at all (gate.ts's onStopRequested) — both scenarios below arm the
+  // session with a real PostToolUse first, matching real usage.
+  async function armSession(): Promise<void> {
+    await runHook("PostToolUse", { hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: "x.ts" } })
+  }
+
+  test("allow path: passing check prints nothing to stdout, exits 0", async () => {
+    writeGate("true")
+    await armSession()
+    const { exitCode, stdout, stderr } = await runHook("Stop", { hook_event_name: "Stop" })
+    expect(exitCode).toBe(0)
+    expect(stdout).toBe("")
+    expect(stderr).toBe("")
+  })
+
+  test("block path: failing check prints the exact block JSON, exits 0 (block is signaled in stdout, not exit code)", async () => {
+    writeGate("false", { rounds: 2 })
+    await armSession()
+    const { exitCode, stdout } = await runHook("Stop", { hook_event_name: "Stop" })
+    expect(exitCode).toBe(0)
+    // gate.ts synthesizes a fallback when the check's own output is empty
+    // (`check exited with code ${code} and produced no output`) — "false"
+    // exits 1 with no stdout/stderr, so that's the real evidence text.
+    const expectedReason = composeBlockMessage({
+      kind: "block",
+      evidence: "check exited with code 1 and produced no output",
+      round: 1,
+      roundsMax: 2,
+    })
+    expect(JSON.parse(stdout.trim())).toEqual({ decision: "block", reason: expectedReason })
   })
 })
