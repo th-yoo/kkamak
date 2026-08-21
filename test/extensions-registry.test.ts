@@ -17,6 +17,10 @@ function fakeExtension(over: Partial<Extension> = {}): Extension {
   }
 }
 
+// K4 review Q6: EXTENSIONS is now a Record<string, () => Promise<Extension>>
+// (lazy-loaded) rather than a Record<string, Extension> — every test
+// registration below wraps its fake in a loader to match.
+
 describe("loadActiveExtensionsFrom", () => {
   test("no enabled extensions: wrapHost is identity, afterDecision is a noop", async () => {
     const { host, logger } = makeHarness({ raw: '{"check":"x"}' })
@@ -39,7 +43,7 @@ describe("loadActiveExtensionsFrom", () => {
     const { host } = makeHarness({ raw: '{"check":"x","extensions":{"known":true}}' })
     const wrapped: GateHost = { ...host, info: { ...host.info, app: "wrapped" } }
     const known = fakeExtension({ wrapHost: () => wrapped })
-    const ext = await loadActiveExtensionsFrom(host, { known }, CTX)
+    const ext = await loadActiveExtensionsFrom(host, { known: async () => known }, CTX)
     expect(ext.wrapHost(host)).toBe(wrapped)
   })
 
@@ -50,7 +54,7 @@ describe("loadActiveExtensionsFrom", () => {
         throw new Error("boom")
       },
     })
-    const ext = await loadActiveExtensionsFrom(host, { known }, CTX)
+    const ext = await loadActiveExtensionsFrom(host, { known: async () => known }, CTX)
     await expect(ext.afterDecision(STOP, ALLOW)).resolves.toBeUndefined()
     expect(logger.messages).toHaveLength(1)
     expect(logger.messages[0]).toContain("known")
@@ -75,10 +79,49 @@ describe("loadActiveExtensionsFrom", () => {
         seenAfterCtx = c
       },
     })
-    const ext = await loadActiveExtensionsFrom(host, { known }, ctx)
+    const ext = await loadActiveExtensionsFrom(host, { known: async () => known }, ctx)
     ext.wrapHost(host)
     await ext.afterDecision(STOP, ALLOW)
     expect(seenWrapCtx).toEqual(ctx)
     expect(seenAfterCtx).toEqual(ctx)
+  })
+
+  // K4 review Q6: the registry is lazy now — a loader that itself throws
+  // (a broken dynamic import, a module that fails to evaluate) must not
+  // take the whole hook down. Same "log and exclude" treatment as an
+  // unregistered name.
+  test("a loader that throws is logged and the extension is excluded from active (not enabled-but-broken silently)", async () => {
+    const { host, logger } = makeHarness({ raw: '{"check":"x","extensions":{"broken":true}}' })
+    const ext = await loadActiveExtensionsFrom(
+      host,
+      {
+        broken: async () => {
+          throw new Error("module explosion")
+        },
+      },
+      CTX,
+    )
+    expect(ext.wrapHost(host)).toBe(host) // never loaded -> never applied
+    await expect(ext.afterDecision(STOP, ALLOW)).resolves.toBeUndefined()
+    expect(logger.messages).toHaveLength(1)
+    expect(logger.messages[0]).toContain("broken")
+    expect(logger.messages[0]).toContain("module explosion")
+  })
+
+  test("the loader is called only for enabled names, not for every registered name", async () => {
+    const { host } = makeHarness({ raw: '{"check":"x","extensions":{"known":true}}' })
+    let unusedLoaderCalled = false
+    await loadActiveExtensionsFrom(
+      host,
+      {
+        known: async () => fakeExtension(),
+        unused: async () => {
+          unusedLoaderCalled = true
+          return fakeExtension({ name: "unused" })
+        },
+      },
+      CTX,
+    )
+    expect(unusedLoaderCalled).toBe(false)
   })
 })

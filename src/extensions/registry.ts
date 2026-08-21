@@ -1,6 +1,5 @@
 import type { GateDecision, GateEvent, GateHost } from "../kernel/ports.ts"
 import { parseEnabledExtensions } from "./config.ts"
-import { gaugeExtension } from "./gauge/index.ts"
 
 /**
  * Adapter-supplied context an extension needs but GateHost doesn't carry
@@ -36,17 +35,39 @@ export interface Extension {
 }
 
 export interface ActiveExtensions {
-  /** Identity when no extension is enabled. ctx is bound at load time. */
+  /**
+   * The R13 hold-and-flush shape (K4 review): wrapHost's decorated
+   * sensor.append does not necessarily forward a line immediately — an
+   * extension MAY withhold it and flush later, from within its own
+   * afterDecision call, once async work (e.g. shadow eval) has run. Every
+   * line an active extension's wrapHost intercepts is guaranteed to be
+   * flushed to the real sink by the end of the SAME afterDecision call
+   * that follows it, in the same process invocation — never silently
+   * dropped, never deferred past that point. Identity when no extension is
+   * enabled. ctx is bound at load time.
+   */
   wrapHost(host: GateHost): GateHost
   /** Noop when no extension is enabled. ctx is bound at load time. */
   afterDecision(event: GateEvent, decision: GateDecision): Promise<void>
 }
 
-/** K4 flips this from empty to real: "gauge" is registered, still
- * inert-by-default (config-gated — see gaugeExtension's own header comment
- * for the "extensions":{"gauge":true} activation path). */
-export const EXTENSIONS: Record<string, Extension> = {
-  gauge: gaugeExtension,
+/**
+ * K6 review (Q6, Medium): a static `Record<string, Extension>` meant a
+ * static top-level import of every registered extension's module — gauge's
+ * own registerProvider side effect ran on EVERY hook invocation, even with
+ * gauge disabled, adding ~11ms per event regardless of enablement. Lazy
+ * instead: each entry is a loader, dynamic-imported ONLY for names
+ * gate.json's own "extensions" block actually enables.
+ *
+ * Specifiers here MUST be static string literals, never built at runtime
+ * from a variable or template — test/imports.test.ts's "no dynamic import
+ * uses a computed specifier" guard exists specifically to catch that
+ * class, and a runtime-built specifier here would defeat both that guard
+ * and the package-containment scan's ability to verify every relative
+ * import resolves to a real file.
+ */
+export const EXTENSIONS: Record<string, () => Promise<Extension>> = {
+  gauge: () => import("./gauge/index.ts").then((m) => m.gaugeExtension),
 }
 
 /**
@@ -57,20 +78,24 @@ export const EXTENSIONS: Record<string, Extension> = {
  */
 export async function loadActiveExtensionsFrom(
   host: GateHost,
-  registry: Record<string, Extension>,
+  registry: Record<string, () => Promise<Extension>>,
   ctx: ExtensionContext,
 ): Promise<ActiveExtensions> {
   const enabledNames = parseEnabledExtensions(host.config.read())
   const active: Extension[] = []
   for (const name of enabledNames) {
-    const ext = registry[name]
-    if (!ext) {
+    const load = registry[name]
+    if (!load) {
       host.logger.log(
         `kkamak: extensions.${name} is enabled in gate.json but no such extension is registered — ignoring`,
       )
       continue
     }
-    active.push(ext)
+    try {
+      active.push(await load())
+    } catch (err) {
+      host.logger.log(`kkamak: extensions.${name} failed to load: ${String(err)}`)
+    }
   }
   // active is already in sorted-name order: enabledNames is sorted by
   // parseEnabledExtensions, and this loop preserves that order.

@@ -7,7 +7,7 @@ import { INITIAL_STATE } from "../src/kernel/state.ts"
 import { loadActiveExtensions } from "../src/extensions/registry.ts"
 import type { ExtensionContext } from "../src/extensions/registry.ts"
 import { gaugeExtension } from "../src/extensions/gauge/index.ts"
-import { gaugeDir, writeGaugeFile, type GaugeFile } from "../src/extensions/gauge/files.ts"
+import { gaugeDir, pickPending, writeGaugeFile, type GaugeFile } from "../src/extensions/gauge/files.ts"
 import { makeHarness, PASS, FAIL } from "./fakes.ts"
 import type { GateDecision, GateEvent } from "../src/kernel/ports.ts"
 
@@ -34,6 +34,22 @@ function pendingGauge(repo: string, over: Partial<GaugeFile> = {}): void {
   })
 }
 
+function floorLine(): import("../src/kernel/ports.ts").SensorLine {
+  return {
+    ts: 1,
+    sessionID: "sid-1",
+    check: "true",
+    accepted: true,
+    gateExhausted: false,
+    rounds: ["accepted"],
+    interrupted: false,
+    marker: false,
+    durationMs: 1,
+    host: "h",
+    app: "claude-code",
+  }
+}
+
 describe("(a)/(i) gauge registered but not enabled: identity passthrough, nothing held", () => {
   test("wrapHost(h) === h via the real loadActiveExtensions path when gauge is not enabled", async () => {
     const repo = mkRepo()
@@ -49,26 +65,29 @@ describe("(a)/(i) gauge registered but not enabled: identity passthrough, nothin
     const ctx: ExtensionContext = { root: repo }
     const ext = await loadActiveExtensions(host, ctx)
     const wrapped = ext.wrapHost(host)
-    wrapped.sensor.append({ ts: 1, sessionID: "s", check: "x", accepted: true, gateExhausted: false, rounds: ["accepted"], interrupted: false, marker: false, durationMs: 1, host: "h", app: "claude-code" }, ".km/gate-outcomes.ndjson")
+    wrapped.sensor.append(floorLine(), ".km/gate-outcomes.ndjson")
     expect(sensor.lines).toHaveLength(1)
     expect((sensor.lines[0] as { gauge?: unknown }).gauge).toBeUndefined()
   })
 })
 
-describe("(b) enabled + a completed Stop cycle: sensor line carries a real gauge field", () => {
-  test("a real gate.handle(Stop) cycle, wrapped, flushes a line with a real gauge annotation", async () => {
+describe("(b)/Q7 real enablement path: wrapHost(h) !== h, and a real Stop cycle produces a gauge-annotated line", () => {
+  test("gate.json {extensions:{gauge:true}} via the real loadActiveExtensions → wrapHost changes the host, and the flushed Stop line carries a real gauge field", async () => {
     const repo = mkRepo()
     pendingGauge(repo)
     const { host, store, sensor } = makeHarness({
-      raw: '{"check":"true"}',
+      raw: '{"check":"true","extensions":{"gauge":true}}',
       script: [PASS, FAIL], // 1st: the floor check (kernel); 2nd: the gauge's own derived check
     })
     store.save("sid-1", { ...INITIAL_STATE, edited: true }, 0)
     const ctx: ExtensionContext = { root: repo }
 
-    const wrapped = gaugeExtension.wrapHost(host, ctx)
+    const ext = await loadActiveExtensions(host, ctx)
+    const wrapped = ext.wrapHost(host)
+    expect(wrapped).not.toBe(host) // a registry-key typo would leave this identity — real gate
+
     const decision = await createGate(wrapped).handle(STOP)
-    await gaugeExtension.afterDecision(STOP, decision, host, ctx)
+    await ext.afterDecision(STOP, decision)
 
     expect(sensor.lines).toHaveLength(1)
     const gauge = (sensor.lines[0] as { gauge?: Record<string, unknown> }).gauge
@@ -95,28 +114,32 @@ describe("(c) enabled + provider failure: {present:false, offReason} with the sp
   })
 })
 
-describe("(d)/(g) total dependency failure: afterDecision resolves, every held line still flushed", () => {
-  test("config unparseable at flush time → afterDecision resolves, held line flushed with offReason:no-record, zero lines remain held", async () => {
+describe("(d)/(g) total dependency failure: afterDecision resolves, every held line still flushed, nothing remains held", () => {
+  test("config unparseable at flush time → afterDecision resolves, held line flushed with offReason:error (Q5: distinct from no-record), and a second afterDecision on the same host flushes nothing (zero-remaining observable)", async () => {
     const repo = mkRepo()
     pendingGauge(repo)
     const { host, sensor, config } = makeHarness({ raw: '{"check":"true"}', script: [PASS] })
     const ctx: ExtensionContext = { root: repo }
 
     const wrapped = gaugeExtension.wrapHost(host, ctx)
-    wrapped.sensor.append(
-      { ts: 1, sessionID: "sid-1", check: "true", accepted: true, gateExhausted: false, rounds: ["accepted"], interrupted: false, marker: false, durationMs: 1, host: "h", app: "claude-code" },
-      ".km/gate-outcomes.ndjson",
-    )
+    wrapped.sensor.append(floorLine(), ".km/gate-outcomes.ndjson")
     // Break config parsing entirely for the flush's own read — annotateLine's
-    // own guard (no cfg -> immediate no-record fallback) must still resolve.
+    // own guard (no cfg -> immediate stamped fallback) must still resolve.
     config.raw = "{not json"
 
     await expect(gaugeExtension.afterDecision(STOP, ALLOW, host, ctx)).resolves.toBeUndefined()
     expect(sensor.lines).toHaveLength(1)
     expect((sensor.lines[0] as { gauge?: Record<string, unknown> }).gauge).toEqual({
       present: false,
-      offReason: "no-record",
+      offReason: "error", // Q5: unreadable config is a real break, not "nothing was pending"
     })
+
+    // Zero-remaining observable (Q1/g): the WeakMap entry for this host was
+    // drained on the first afterDecision call — a second call must find
+    // nothing held and append nothing new.
+    const linesBefore = sensor.lines.length
+    await gaugeExtension.afterDecision(STOP, ALLOW, host, ctx)
+    expect(sensor.lines.length).toBe(linesBefore)
   })
 
   test("the check runner rejects (a genuine internal error, not a failing check) → afterDecision still resolves and flushes", async () => {
@@ -126,39 +149,38 @@ describe("(d)/(g) total dependency failure: afterDecision resolves, every held l
     const ctx: ExtensionContext = { root: repo }
 
     const wrapped = gaugeExtension.wrapHost(host, ctx)
-    wrapped.sensor.append(
-      { ts: 1, sessionID: "sid-1", check: "true", accepted: true, gateExhausted: false, rounds: ["accepted"], interrupted: false, marker: false, durationMs: 1, host: "h", app: "claude-code" },
-      ".km/gate-outcomes.ndjson",
-    )
+    wrapped.sensor.append(floorLine(), ".km/gate-outcomes.ndjson")
     await expect(gaugeExtension.afterDecision(STOP, ALLOW, host, ctx)).resolves.toBeUndefined()
     expect(sensor.lines).toHaveLength(1) // flushed, not dropped
   })
 })
 
-describe("(f) eval throws mid-flush: the held line is still flushed with a specific offReason", () => {
-  test("shadowEvaluateAtStop's own dependency throwing still resolves to a flushed, offReason:no-record line", async () => {
+describe("(f) eval throws mid-flush: the held line is still flushed with offReason:error", () => {
+  test("a genuinely throwing dependency (host.config.read itself) is caught by annotateLine's own outer catch, not swallowed silently upstream", async () => {
     const repo = mkRepo()
     pendingGauge(repo)
-    // No script at all + no fallback override -> FakeCheck's default
-    // fallback ({code:0,output:""}) still runs fine; the throw case is
-    // already covered above (d/g) via an injected Error. This test instead
-    // pins that even a routine pending-but-somehow-unreadable case still
-    // resolves with the specific reason, not a generic catch-all message.
-    fs.rmSync(path.join(gaugeDir(repo), "sid-1-1.json"))
-    fs.writeFileSync(path.join(gaugeDir(repo), "sid-1-1.json"), "{corrupt json")
     const { host, sensor } = makeHarness({ raw: '{"check":"true"}', script: [PASS] })
+    // Inject a throwing dep directly — per the review finding, substituting
+    // a corrupt pending file does NOT exercise this path: pickPending's own
+    // try/catch (files.ts) already swallows a corrupt pending file and
+    // treats it as "nothing pending", never reaching annotateLine's outer
+    // catch at all. host.config.read() throwing is a real dependency
+    // failure that DOES reach it.
+    host.config = {
+      read(): string | undefined {
+        throw new Error("disk read exploded")
+      },
+    }
     const ctx: ExtensionContext = { root: repo }
 
     const wrapped = gaugeExtension.wrapHost(host, ctx)
-    wrapped.sensor.append(
-      { ts: 1, sessionID: "sid-1", check: "true", accepted: true, gateExhausted: false, rounds: ["accepted"], interrupted: false, marker: false, durationMs: 1, host: "h", app: "claude-code" },
-      ".km/gate-outcomes.ndjson",
-    )
+    wrapped.sensor.append(floorLine(), ".km/gate-outcomes.ndjson")
     await gaugeExtension.afterDecision(STOP, ALLOW, host, ctx)
+
     expect(sensor.lines).toHaveLength(1)
     expect((sensor.lines[0] as { gauge?: Record<string, unknown> }).gauge).toEqual({
       present: false,
-      offReason: "no-record",
+      offReason: "error",
     })
   })
 })
@@ -170,14 +192,8 @@ describe("(h) ordering + relativePath fidelity", () => {
     const ctx: ExtensionContext = { root: repo }
 
     const wrapped = gaugeExtension.wrapHost(host, ctx)
-    wrapped.sensor.append(
-      { ts: 1, sessionID: "sid-1", check: "true", accepted: true, gateExhausted: false, rounds: ["accepted"], interrupted: false, marker: false, durationMs: 1, host: "h", app: "claude-code" },
-      "first.ndjson",
-    )
-    wrapped.sensor.append(
-      { ts: 2, sessionID: "sid-1", check: "true", accepted: true, gateExhausted: false, rounds: ["accepted"], interrupted: false, marker: false, durationMs: 1, host: "h", app: "claude-code" },
-      "second.ndjson",
-    )
+    wrapped.sensor.append({ ...floorLine(), ts: 1 }, "first.ndjson")
+    wrapped.sensor.append({ ...floorLine(), ts: 2 }, "second.ndjson")
     await gaugeExtension.afterDecision(STOP, ALLOW, host, ctx)
 
     expect(sensor.lines.map((l) => l.ts)).toEqual([1, 2])
@@ -189,10 +205,8 @@ describe("(e) no-extensions parity guarantee", () => {
   // The K1 subprocess parity tests (test/claude-code-adapter.test.ts's
   // "hook-cli.ts subprocess behavior (no extensions in gate.json)" describe
   // block) already assert this at the process boundary and needed ZERO
-  // edits through R12/R13's whole ExtensionContext threading — this test
-  // just re-confirms the same guarantee at this file's own level: with
-  // gauge registered (EXTENSIONS is non-empty as of K4) but not enabled,
-  // a real Stop cycle's decision is unaffected.
+  // edits through R12/R13/R16's whole redesign — this test re-confirms the
+  // same guarantee at this file's own level.
   test("gauge registered but not enabled: a real Stop cycle's decision is identical with and without going through the registry", async () => {
     const opts = { raw: '{"check":"true"}', script: [PASS] }
     const before = makeHarness(opts)
@@ -207,5 +221,75 @@ describe("(e) no-extensions parity guarantee", () => {
     const decisionAfter = await createGate(ext.wrapHost(after.host)).handle(STOP)
 
     expect(decisionAfter).toEqual(decisionBefore)
+  })
+})
+
+describe("Q1 (Critical): per-host held-line isolation — two hosts in one process must never cross-contaminate", () => {
+  test("host A's held line flushes to host A's sink under A's relativePath; host B's flushes to B's under B's — never swapped", async () => {
+    const repoA = mkRepo()
+    const repoB = mkRepo()
+    const a = makeHarness({ raw: '{"check":"true"}', script: [PASS] })
+    const b = makeHarness({ raw: '{"check":"true"}', script: [PASS] })
+    const ctxA: ExtensionContext = { root: repoA }
+    const ctxB: ExtensionContext = { root: repoB }
+
+    const wrappedA = gaugeExtension.wrapHost(a.host, ctxA)
+    const wrappedB = gaugeExtension.wrapHost(b.host, ctxB)
+    wrappedA.sensor.append({ ...floorLine(), ts: 111, sessionID: "sid-a" }, "a-path.ndjson")
+    wrappedB.sensor.append({ ...floorLine(), ts: 222, sessionID: "sid-b" }, "b-path.ndjson")
+
+    await gaugeExtension.afterDecision({ kind: "stop-requested", sessionID: "sid-a" }, ALLOW, a.host, ctxA)
+    await gaugeExtension.afterDecision({ kind: "stop-requested", sessionID: "sid-b" }, ALLOW, b.host, ctxB)
+
+    expect(a.sensor.lines).toHaveLength(1)
+    expect(a.sensor.lines[0]!.ts).toBe(111)
+    expect(a.sensor.paths).toEqual(["a-path.ndjson"])
+
+    expect(b.sensor.lines).toHaveLength(1)
+    expect(b.sensor.lines[0]!.ts).toBe(222)
+    expect(b.sensor.paths).toEqual(["b-path.ndjson"])
+  })
+})
+
+describe("Q3 (High): a gauge-only Stop (no file edits) still runs shadow eval and consumes a pending derivation", () => {
+  test("no state.edited at all (kernel returns ALLOW before ever calling sensor.append) + a pending derivation exists → afterDecision still fabricates a gauge-only line AND consumes the pending file", async () => {
+    const repo = mkRepo()
+    pendingGauge(repo)
+    const { host, sensor } = makeHarness({ raw: '{"check":"true"}', script: [FAIL] })
+    // Deliberately NOT arming state (no store.save) — a real no-edit Stop.
+    const ctx: ExtensionContext = { root: repo }
+
+    const wrapped = gaugeExtension.wrapHost(host, ctx)
+    const decision = await createGate(wrapped).handle(STOP)
+    expect(decision).toEqual({ kind: "allow" }) // confirms the kernel's own no-edit fast path fired
+
+    await gaugeExtension.afterDecision(STOP, decision, host, ctx)
+
+    // A line WAS appended even though the kernel itself never held one —
+    // the fabricated gauge-only line (rounds: [] marker, per shadow.ts).
+    expect(sensor.lines).toHaveLength(1)
+    expect(sensor.lines[0]!.rounds).toEqual([])
+    expect((sensor.lines[0] as { gauge?: Record<string, unknown> }).gauge).toMatchObject({
+      present: true,
+      pass: false,
+    })
+
+    // The pending derivation was genuinely consumed (renamed to .done.json),
+    // not just measured and left behind — matching shadow.ts's own
+    // shadowEvaluateAtStop contract for a v1-legacy (non-multi-turn-C) pending.
+    expect(pickPending(gaugeDir(repo), "sid-1")).toBeUndefined()
+    expect(fs.existsSync(path.join(gaugeDir(repo), "sid-1-1.done.json"))).toBe(true)
+  })
+
+  test("no held line, no pending derivation either → nothing is fabricated, nothing is appended", async () => {
+    const repo = mkRepo() // no pendingGauge()
+    const { host, sensor } = makeHarness({ raw: '{"check":"true"}', script: [PASS] })
+    const ctx: ExtensionContext = { root: repo }
+
+    const wrapped = gaugeExtension.wrapHost(host, ctx)
+    const decision = await createGate(wrapped).handle(STOP)
+    await gaugeExtension.afterDecision(STOP, decision, host, ctx)
+
+    expect(sensor.lines).toHaveLength(0)
   })
 })

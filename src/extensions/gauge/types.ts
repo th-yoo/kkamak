@@ -19,9 +19,18 @@ export type GaugeTransport = (typeof GAUGE_TRANSPORTS)[number]
 
 /** Why the instrument produced nothing. Present iff `present` is false
  * (pre-reg §6b amendment, 2026-08-01). `no-record` is deliberately
- * collective — armed but nothing to attach, covering not-task-shaped,
- * daily-cap, a swallowed spawn error, and a still-pending derivation. */
-export type GaugeOffReason = "disabled" | "env-off" | "no-record"
+ * collective — armed but nothing pending to attach at all.
+ *
+ * "error" is a deliberate, commented divergence from the lab's closed
+ * union (K4 review R15): the lab's own "no-record" conflates four states
+ * — nothing pending, a glue-code exception, unreadable config, and a
+ * post-throw flush-loop salvage — into one value, losing the distinction
+ * between "armed, nothing to measure" and "armed, something broke." This
+ * extension's own flush path (gauge/index.ts) emits "error" for the
+ * latter three and reserves "no-record" for the former only. A future
+ * back-port to the lab should reconcile this the other direction (widen
+ * the lab's own union), not narrow this one back down. */
+export type GaugeOffReason = "disabled" | "env-off" | "no-record" | "error"
 
 /** km-gauge shadow-eval record (pre-reg §2.3) — attached to sensor lines,
  * NEVER consulted by any gate decision. absent/present:false = no gauge. */

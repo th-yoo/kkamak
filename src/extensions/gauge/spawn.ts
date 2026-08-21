@@ -3,16 +3,12 @@
 // Every failure is swallowed: gauge problems must NEVER touch a session
 // (same prime directive as hook-cli).
 //
-// K4 wiring note: this function is PORTED but NOT FIRED anywhere in kkamak
-// yet. It needs the real prompt TEXT (isTaskShaped(prompt)), but kkamak's
-// kernel GateEvent (kernel/ports.ts) carries no prompt text on any variant
-// — including "new-user-prompt" ({kind, sessionID} only), by deliberate
-// kernel design. Extension.afterDecision only ever receives a GateEvent, so
-// there is no real trigger data to call this with under the current seam,
-// and extending GateEvent to carry prompt text would mean touching
-// kernel/ports.ts, which this task's constraints forbid. Kept ported and
-// independently tested (same precedent as K2's decideNudge, ported but not
-// wired) rather than silently dropped.
+// K4 wiring: fired from gauge/index.ts's afterDecision on new-user-prompt
+// events. It needs the real prompt TEXT (isTaskShaped(prompt)), which
+// kkamak's kernel GateEvent never carries on any variant, by deliberate
+// kernel design — resolved via ExtensionContext (ruling R12, registry.ts),
+// sourced from the adapter layer (hook-input.ts's prompt extraction), never
+// from the kernel.
 import path from "node:path"
 import fs from "node:fs"
 import type { GaugeSpawnConfig } from "./types.ts"

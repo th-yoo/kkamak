@@ -1,11 +1,14 @@
 // gauge extension (K4) — registers "gauge" against the K1 extension seam.
-// Wires shadow.ts/spawn.ts (K2/K4 ports, verbatim) and cli-spawn.ts (K3) into
-// the real Stop/UserPromptSubmit path, config-gated by gate.json's
-// "extensions": {"gauge": true} — the K1 registry only ever calls into this
-// module when that's on, so every offReason branch that depends on gauge
-// being OFF ("disabled", "env-off" per the lab's hook-cli.ts:340-363
-// vocabulary) is structurally unreachable from in here; the only reachable
-// in-extension value is "no-record" (armed, nothing to attach).
+// Wires shadow.ts/spawn.ts/refiner.ts/refiner-cli.ts (ported) and
+// cli-spawn.ts (K3) into the real Stop/UserPromptSubmit path, config-gated
+// by gate.json's "extensions": {"gauge": true} — the K1 registry only ever
+// calls into this module when that's on, so every offReason branch that
+// depends on gauge being OFF ("disabled", "env-off" per the lab's
+// hook-cli.ts:340-363 vocabulary) is structurally unreachable from in here;
+// the reachable in-extension values are "no-record" (armed, nothing pending
+// at all) and "error" (armed, something broke — glue exception, unreadable
+// config, or a post-throw salvage; K4 review R15, deliberately distinct
+// from "no-record" — see types.ts's GaugeOffReason doc comment).
 //
 // R13 (hold-and-flush): SensorSink.append (kernel/ports.ts) is synchronous
 // — (line, relativePath): void — but shadow eval is async (it may spawn a
@@ -14,28 +17,57 @@
 // calling appendSensor once (cc-gate-plugin/src/hook-cli.ts:349-381) — it
 // never annotates inside an append call either. This wrapHost does the
 // same: its decorated sensor.append does not forward lines, it HOLDS them;
-// afterDecision (already awaited by hook-cli.ts before the plan is emitted)
-// is the flush point, where async shadow eval is safe to run before the
-// real write happens.
+// afterDecision (already awaited by hook-cli.ts before the plan is emitted,
+// per K1's own wiring) is the flush point, where async shadow eval is safe
+// to run before the real write happens.
+//
+// R16 (K4 review Q1, Critical): held-line state is keyed per ORIGINAL
+// (pre-wrap) GateHost via a WeakMap, not a module-global — two loads in one
+// process (a real risk: bun:test shares a module cache across every test
+// file) would otherwise misroute one host's held lines into another's
+// flush. Correctness depends on the SAME host object reaching both
+// Extension.wrapHost (via ActiveExtensions.wrapHost's own host argument)
+// and Extension.afterDecision (registry.ts's closure-captured host) — true
+// under the real hook-cli.ts lifecycle and under loadActiveExtensions's own
+// design, but only guaranteed when gauge is the sole (or first-applied)
+// active extension; a later multi-extension composition where gauge is NOT
+// first in the reduce chain would receive an already-wrapped host in
+// wrapHost, breaking this correlation. Not a concern today (gauge is the
+// only registered extension) — flagged for whoever adds a second one.
+//
+// Q3 (K4 review, High): the kernel returns ALLOW on a no-edit Stop WITHOUT
+// ever calling sensor.append (kernel/gate.ts:289, `if (!state.edited &&
+// !state.gating) return ALLOW`) — so a "gauge-only" Stop (no file edits,
+// but a pending derivation exists) held nothing at all, and shadow eval
+// never ran, so a pending derivation could NEVER be consumed. The lab runs
+// shadow eval UNCONDITIONALLY on every Stop regardless of whether a floor
+// line exists (hook-cli.ts:349-357) and fabricates a gauge-only line via
+// shadowEvaluateAtStop's own fabricateLine path when nothing else would be
+// logged. afterDecision below reproduces that: on every stop-requested
+// event where nothing was held, it still runs shadow eval with sensor =
+// undefined and appends the result directly when one comes back (shadow.ts
+// itself already returns undefined when there is genuinely nothing pending
+// — no line is fabricated out of nothing).
 //
 // Crash-window honesty (R13): if the process dies between gate.handle()
 // returning and afterDecision running, a held line is lost. The lab has the
 // IDENTICAL window — it composes the line, evaluates, then appends, all in
 // the same synchronous stretch of one hook invocation. This is parity, not
 // a regression this port introduces.
-import type { GateDecision, GateEvent, GateHost, SensorLine } from "../../kernel/ports.ts"
+import type { GateConfig, GateDecision, GateEvent, GateHost, SensorLine } from "../../kernel/ports.ts"
 import { parseGateConfig } from "../../kernel/config.ts"
 import type { Extension, ExtensionContext } from "../registry.ts"
 import { shadowEvaluateAtStop } from "./shadow.ts"
 import { maybeSpawnGauge } from "./spawn.ts"
+import { gaugeDir, pickPending } from "./files.ts"
 import type { GaugedSensorLine } from "./types.ts"
 import { registerProvider } from "./send-prompt.ts"
 import { cliSpawnProvider, CLI_SPAWN_PROVIDER_ID } from "./providers/cli-spawn.ts"
 
-// kkamak's default send-prompt provider, registered once at extension load.
-// No real call happens until something in a later task actually resolves
-// and calls this provider id — send-prompt.ts's own registry is otherwise
-// untouched (K3).
+// kkamak's default send-prompt provider. Registered when this module is
+// loaded — under Q6's lazy-loading redesign (registry.ts), that is only
+// when "gauge" is actually an enabled name, not at every hook invocation's
+// static import time.
 registerProvider(CLI_SPAWN_PROVIDER_ID, cliSpawnProvider)
 
 interface HeldLine {
@@ -43,24 +75,51 @@ interface HeldLine {
   relativePath: string
 }
 
-// Per-cycle state: reset at the start of each wrapHost call, drained by the
-// following afterDecision call. Safe under the real hook-cli.ts lifecycle
-// (one process per hook invocation, wrapHost always called before
-// afterDecision — K1's own wiring) and under repeated test calls in one
-// process (wrapHost always resets before use).
-let held: HeldLine[] = []
+// R16: keyed on the ORIGINAL (pre-wrap) GateHost, not a module-global — see
+// this file's header comment for the correctness argument and its one
+// known limitation (multi-extension ordering).
+const heldByHost = new WeakMap<GateHost, HeldLine[]>()
+
+function stampGauge(line: SensorLine, offReason: "no-record" | "error"): SensorLine {
+  return { ...line, gauge: { present: false, offReason } } as SensorLine
+}
+
+function safeAppend(host: GateHost, line: SensorLine, relativePath: string): void {
+  // Q2 (K4 review, High): the real sink itself can throw (ENOSPC etc) —
+  // confirmed by the review's own probe, which lost 2 of 3 lines and
+  // rejected afterDecision entirely before this guard existed. Every
+  // append (flush-loop, finally-salvage, and the fabricated-line path
+  // alike) goes through here: log via host.logger (restores the kind of
+  // could-not-append diagnostic the kernel itself would otherwise lose)
+  // and move on rather than losing the rest of the batch or throwing out
+  // of afterDecision.
+  try {
+    host.sensor.append(line, relativePath)
+  } catch (err) {
+    try {
+      host.logger.log(`kkamak: gauge sensor append failed (line dropped): ${String(err)}`)
+    } catch {
+      // nothing more to do
+    }
+  }
+}
 
 /** Runs shadow eval for one held line and returns the line to actually
- * write — real gauge field on success, {present:false, offReason:
- * "no-record"} fallback on anything else. NEVER throws: shadowEvaluateAtStop
- * already swallows its own internal errors (returns the line unchanged),
- * and everything else here (config parse, the runCheck adapter, dep
- * construction) is wrapped again as defense-in-depth per R13 — a bug in
- * this glue code must not be able to eat a line either. */
+ * write — a real gauge field on success, or a stamped fallback. Q5 (K4
+ * review): "no-record" only when there was genuinely nothing pending to
+ * evaluate (checked independently via pickPending, since shadow.ts's own
+ * return value is structurally identical — the line/sensor unchanged —
+ * whether NOTHING was pending or something threw internally and its own
+ * catch swallowed it); "error" for everything else that leaves a line
+ * without a gauge field. NEVER throws itself: defense-in-depth, on top of
+ * shadowEvaluateAtStop's own internal swallow. */
 async function annotateLine(line: SensorLine, ctx: ExtensionContext, host: GateHost): Promise<SensorLine> {
+  let hadPendingBefore: boolean
   try {
     const cfg = parseGateConfig(host.config.read())
-    if (!cfg) return { ...line, gauge: { present: false, offReason: "no-record" } } as SensorLine
+    if (!cfg) return stampGauge(line, "error")
+
+    hadPendingBefore = pickPending(gaugeDir(ctx.root), line.sessionID) !== undefined
 
     const runCheck = async (cmd: string): Promise<{ code: number; out: string }> => {
       const r = await host.check.run(cmd, cfg.checkTimeoutMs)
@@ -75,33 +134,63 @@ async function annotateLine(line: SensorLine, ctx: ExtensionContext, host: GateH
     const gauged = await shadowEvaluateAtStop(ctx.root, line.sessionID, cfg, line as GaugedSensorLine, runCheck, deps)
     const result: GaugedSensorLine = gauged ?? (line as GaugedSensorLine)
     if (!result.gauge) {
-      return { ...result, gauge: { present: false, offReason: "no-record" } } as SensorLine
+      return stampGauge(result as SensorLine, hadPendingBefore ? "error" : "no-record")
     }
     return result as SensorLine
   } catch {
-    return { ...line, gauge: { present: false, offReason: "no-record" } } as SensorLine
+    return stampGauge(line, "error")
+  }
+}
+
+/** Q3: the fabricated-line counterpart to annotateLine, for a stop-requested
+ * event where nothing was held at all. Returns undefined when
+ * shadowEvaluateAtStop itself returns undefined (genuinely nothing
+ * pending — no line fabricated out of nothing, matching shadow.ts's own
+ * documented behavior). */
+async function fabricateIfPending(
+  sessionID: string,
+  ctx: ExtensionContext,
+  host: GateHost,
+): Promise<{ line: SensorLine; relativePath: string } | undefined> {
+  try {
+    const cfg: GateConfig | undefined = parseGateConfig(host.config.read())
+    if (!cfg) return undefined
+
+    const runCheck = async (cmd: string): Promise<{ code: number; out: string }> => {
+      const r = await host.check.run(cmd, cfg.checkTimeoutMs)
+      return { code: r.code, out: r.output }
+    }
+    const deps = {
+      now: () => host.clock.now(),
+      hostname: () => host.info.host,
+      log: (msg: string) => host.logger.log(msg),
+    }
+
+    const fabricated = await shadowEvaluateAtStop(ctx.root, sessionID, cfg, undefined, runCheck, deps)
+    if (!fabricated) return undefined
+    return { line: fabricated as SensorLine, relativePath: cfg.sensor }
+  } catch {
+    return undefined
   }
 }
 
 /** Detached, best-effort launch — mirrors the lab's own
  * Bun.spawn+unref() pattern (cc-gate-plugin/src/hook-cli.ts), simplified:
  * Bun's own unref() achieves detachment without the lab's extra
- * `bash -c "nohup ... &"` shell wrapping. The target script
- * (refiner-cli.ts) is not ported in kkamak yet (spawn.ts's own module doc
- * comment) — this wires the mechanism; a later task supplies a real
- * target. */
+ * `bash -c "nohup ... &"` shell wrapping. */
 function detachedSpawn(cmd: string[]): void {
   const proc = Bun.spawn(cmd, { stdout: "ignore", stderr: "ignore", stdin: "ignore" })
   proc.unref()
 }
 
 function wrapHost(host: GateHost, _ctx: ExtensionContext): GateHost {
-  held = []
+  const list: HeldLine[] = []
+  heldByHost.set(host, list)
   return {
     ...host,
     sensor: {
       append(line: SensorLine, relativePath: string): void {
-        held.push({ line, relativePath })
+        list.push({ line, relativePath })
       },
     },
   }
@@ -113,26 +202,45 @@ async function afterDecision(
   host: GateHost,
   ctx: ExtensionContext,
 ): Promise<void> {
-  const pending = held
-  held = []
+  const pending = heldByHost.get(host) ?? []
+  heldByHost.delete(host)
+  const remaining = [...pending]
+
   try {
-    while (pending.length > 0) {
-      const item = pending.shift()!
-      const annotated = await annotateLine(item.line, ctx, host)
-      host.sensor.append(annotated, item.relativePath)
+    while (remaining.length > 0) {
+      const item = remaining.shift()!
+      try {
+        const annotated = await annotateLine(item.line, ctx, host)
+        safeAppend(host, annotated, item.relativePath)
+      } catch (err) {
+        // annotateLine itself has its own catch-all and should not reach
+        // here — defense-in-depth against a bug in this wrapper's own
+        // control flow, same reasoning as the finally block below.
+        try {
+          host.logger.log(`kkamak: gauge line annotation failed (dropped): ${String(err)}`)
+        } catch {
+          // nothing more to do
+        }
+      }
     }
   } finally {
-    // R13: whatever's still in `pending` never got a real gauge attempt
-    // (only reachable if the loop above threw despite annotateLine's own
-    // catch-all — e.g. host.sensor.append itself throwing) — flush it now,
-    // stamped no-record, so silence-forbidden holds even against a bug in
-    // this wrapper, not just inside the ported gauge internals.
-    for (const item of pending) {
-      host.sensor.append(
-        { ...item.line, gauge: { present: false, offReason: "no-record" } } as SensorLine,
-        item.relativePath,
-      )
+    // R13/Q2: whatever's still in `remaining` never got a real attempt —
+    // only reachable if the per-item try/catch above somehow didn't run.
+    // Flush it now stamped "error" (something broke, not "nothing was
+    // pending"), so silence-forbidden holds even against a bug in this
+    // wrapper's own control flow, not just inside the already-swallowing
+    // ported gauge internals.
+    for (const item of remaining) {
+      safeAppend(host, stampGauge(item.line, "error"), item.relativePath)
     }
+  }
+
+  // Q3: nothing was held for this Stop (the kernel never called append at
+  // all — a no-edit "gauge-only" Stop) — still run shadow eval, still give
+  // a pending derivation a chance to be consumed and measured.
+  if (event.kind === "stop-requested" && pending.length === 0) {
+    const fabricated = await fabricateIfPending(event.sessionID, ctx, host)
+    if (fabricated) safeAppend(host, fabricated.line, fabricated.relativePath)
   }
 
   // Spawn seam (K4 ruling R12): fires only on new-user-prompt, only when
