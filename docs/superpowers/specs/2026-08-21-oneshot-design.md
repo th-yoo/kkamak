@@ -1,181 +1,214 @@
 # oneshot — design
 
-Date: 2026-08-21
-Status: draft, pending user review (this file) and cross-lane review (meta-harness lane-B, checkpoint 1)
-Scope: new, isolated component only. The existing hook-gate (kernel/adapters/runtime for
-Stop/PostToolUse/UserPromptSubmit) is explicitly out of scope and must not change.
+Date: 2026-08-21 (revision 2 — supersedes commit 1d0c487's MCP-server approach; struck entirely,
+not deferred, see Revision note. 1d0c487 is kept in history as superseded-with-reason, not
+deleted.)
+Status: draft, pending user review (this file) and cross-lane review (meta-harness lane-B)
+Scope: one skill + one small CLI helper. No new running component, no hook changes, no change to
+the existing gate (kernel/adapters/runtime for Stop/PostToolUse/UserPromptSubmit).
+
+## Revision note
+
+Revision 1 of this file proposed an MCP server exposing a `oneshot(program)` tool with a narrow
+guest API (`bash`, `check`), reasoning from the meta-harness lab's `code-mode-gate`, where
+capability discipline (no guest commit capability) is load-bearing because the gate is the *only*
+effect path.
+
+That reasoning doesn't transfer to Claude Code: Claude already has unrestricted `Bash`. An MCP
+tool sitting next to `Bash` restricts nothing — nothing stops Claude from ignoring it and running
+`Bash` directly, so the "only surface" property that made the lab's discipline meaningful never
+holds here. The lab's actual point — batch ops + inline verification in one execution so a
+rejection is consumed without costing a round trip — is achievable with a plain script run through
+the existing `Bash` tool. No worker, no RPC, no MCP server, no new plugin manifest surface.
+MCP re-enters only for a host with no unrestricted exec tool, or a deliberate exclusive-surface
+experiment — that's a lab/bench question, not a kkamak one.
 
 ## Purpose
 
-`oneshot`: one guest JS program per model turn, run host-side, that batches shell edits and
-inline check-verification into a single MCP tool call. Rejections are absorbed inside the guest
-program's own execution — the model sees the failure and can retry before the turn ends, instead
-of paying a full round trip per attempt. The verifier is kkamak's own `check` command, the same
-one the Stop-hook gate already runs; `oneshot` does not invent a new completion signal, it moves
-an existing one earlier and lets a model consume it in-program.
+`oneshot`: a skill that tells Claude, when it's about to do an edit-then-verify loop, to run one
+script (one `Bash` tool call) that performs the edits, invokes `gate.json`'s own `check` command
+inline, and retries *inside that same script execution* on failure — instead of making a separate
+tool call (and paying a round trip) per attempt. The verifier is the same `check` command the
+Stop-hook gate already runs; `oneshot` doesn't add a new completion signal, it lets Claude consume
+the existing one earlier, in-script, if it chooses to.
 
-This is a genuinely new component, not a bend of the hook-gate path — kkamak's hook adapters have
-no tool-call mediation surface (Claude's tool calls never route through kkamak). `oneshot` ships
-as its own MCP server, additive, OFF by default.
+## Non-goals
 
-## Non-goals (explicitly unclaimed, stated up front per this repo's claim-hygiene rule)
+- **No new trust boundary.** The script runs via the same unsandboxed `Bash` tool Claude already
+  has. `oneshot` adds no isolation and claims none.
+- **No enforcement.** Nothing here makes Claude use `oneshot`, and nothing prevents bypass. If
+  enforcement is ever wanted, that is the Stop-hook gate's job (already shipped) — `oneshot` is
+  purely a cost-saving option Claude can pick up via its skill description, same as every other
+  skill in this ecosystem.
+- **No enable flag.** There is no running component to gate on/off (the earlier MCP design's
+  `oneshot.enabled` config field is struck along with the server). A skill's trigger description
+  is its only activation surface — consistent with how every other skill here works, not a special
+  case for this one.
+- **Actuation still unmeasured.** Whether Claude, given the skill, actually (a) picks it up for a
+  suitable task and (b) consumes an in-script check failure by retrying rather than abandoning the
+  script are both open, model-behavior questions — not something a unit test can prove. This
+  design ships the mechanism and a protocol to measure both; it does not claim either happens
+  until logged data says so (see Dogfood protocol).
 
-- **Not a sandbox.** The guest's Bun Worker is a thread boundary, not a security boundary. A
-  guest already has `api.bash`, i.e. full shell access at the user's privilege — the same trust
-  level kkamak's `check` command already carries. `oneshot` adds no new trust boundary; it moves
-  existing trust earlier in the turn.
-- **Not staged/committed edits.** `api.bash` mutates the working tree immediately. There is no
-  claim-commit model here (unlike the meta-harness lab's `code-mode-gate`, which stages typed
-  claims and commits only on verify-pass). `api.check()` gates the *completion signal returned to
-  the model*, not the edit — architecturally identical to what the Stop-hook already does, just
-  inline. Naming reflects this: no function is called "commit."
-- **No typed `Verifier<C,S>`.** The effect gate is `gate.json`'s existing shell `check`,
-  literally. A pluggable typed-claim verifier is a real future extension point (see Open
-  Questions) but is not built here — kkamak has no typed-claim concept today and inventing one
-  now, with no consumer, is exactly the scope-creep class this repo's audits exist to catch.
-- **Actuation is unmeasured here too.** Whether a real model consumes in-program steering (vs.
-  giving up and ending the turn on first failure) is not something this design proves. The lab's
-  own prior is 1/8. `oneshot` prices the mechanism; it does not claim actuation works until a
-  measured fixture says so (see Testing).
-
-## Architecture
-
-New top-level directory, isolated from the existing gate:
+## Components
 
 ```
-src/
-  kernel/        UNCHANGED. Zero imports from oneshot/.
-  runtime/       UNCHANGED except: check-runner.ts's SpawnCheckRunner is imported BY oneshot/
-                 (one-directional — runtime/ gains no knowledge of oneshot/).
-  adapters/      UNCHANGED. Zero imports from oneshot/.
-  oneshot/       NEW. Everything below lives here.
-    mcp-server.ts    stdio MCP server, registers one tool: oneshot(program: string)
-    runtime.ts       Bun Worker orchestration: spawn, RPC dispatch, enumerated fail-closed caps
-    guest-shell.ts   worker-side entry: sets up api.bash / api.check, runs the guest program
-    verifier.ts      runCheck(cwd) -> { ok, output } — thin wrapper over SpawnCheckRunner
-    types.ts         FailureCode, Verdict, GuestApi shapes
+skills/
+  oneshot/
+    SKILL.md       trigger description + instructions: when to reach for oneshot, how to
+                    structure the script, how to read the structured result
+    run-once.ts     bun CLI: reads gate.json, runs its `check` once (reusing the existing
+                    SpawnCheckRunner + config-source, not reimplementing them), prints one JSON
+                    line { ok, output } to stdout, exits 0 on ok / 1 on not-ok
 ```
 
-An executable guard test (`oneshot/isolation.test.ts`, grep-based like the lab's
-`agnostic.test.ts`) asserts no file under `kernel/` or `adapters/` imports anything from
-`oneshot/`. This is a real check that fails if the import is added, not a comment — per this
-repo's rule that a check must be built to prove it can fail, not just read as absent.
+`run-once.ts` imports from `runtime/` (read-only reuse of `SpawnCheckRunner` and the config
+reader). Nothing under `kernel/`, `adapters/`, or `runtime/` imports from `skills/` — one
+directional, enforced by a small grep-guard test (`skills/oneshot/isolation.test.ts`), built by
+temporarily adding a violating import in the test fixture and asserting the guard catches it, not
+just read as absent.
 
-## Config
+## Script contract (what `SKILL.md` instructs Claude to write)
 
-New optional block in `gate.json`, absent = disabled (matches the existing "no gate.json = inert"
-convention — config-gated inertness, not a runtime toggle):
+A script that, in one `Bash` call:
+1. performs the edit(s) for this attempt,
+2. runs `bun "<resolved plugin root>/skills/oneshot/run-once.ts"` — the literal absolute path,
+   inlined by Claude when it writes the script (see Path resolution below), never the
+   `${CLAUDE_PLUGIN_ROOT}` token itself — capturing its JSON line,
+3. on `ok: true` — proceeds to print the final structured result and exit 0,
+4. on `ok: false` — prints `output` (this *is* the steering; no separate steering object), retries
+   from step 1, bounded by `gate.json`'s `rounds` — same **configured value** as the Stop-hook
+   gate reads, so there's one number to tune, but an **independent counter**: an in-script retry
+   does not touch the Stop-hook gate's own per-session round state (`state.ts`/`GateState`). A
+   script that burns 2 in-script rounds and still ends the turn with edits outstanding leaves the
+   Stop-hook gate's own count untouched — the gate still gets its own full round budget afterward,
+   unaffected by what `oneshot` did inside the turn.
+5. on exhausting rounds — prints the final structured result with `ok: false` and exits 1.
+
+Structured result (final line of stdout, so it survives in the `Bash` tool's captured output):
 
 ```json
-{
-  "check": "bun test",
-  "rounds": 2,
-  "oneshot": {
-    "enabled": false,
-    "check": null,
-    "timeoutMs": null,
-    "outputCapBytes": 65536,
-    "pendingCallCap": 16
-  }
-}
+{ "ok": true, "rounds": 2, "roundsMax": 2, "lastCheckOutput": "..." }
 ```
 
-- `enabled` (default `false`) — the only thing that turns `oneshot` on. Never implied by
-  installing the plugin or by `mcpServers` being declared in `plugin.json`.
-- `check` / `timeoutMs` (default `null`) — when unset, `oneshot` reuses the top-level `check` /
-  `checkTimeoutMs`. One config source for what "passing" means; no drift between the inline gate
-  and the Stop-hook gate unless the user deliberately splits them.
-- `outputCapBytes`, `pendingCallCap` — hard caps on guest output size and in-flight RPC calls,
-  ported from the lab's enumerated-failure-code design.
+Total wall-clock is capped the same way any `Bash` call already is: the caller passes a timeout
+to the `Bash` tool. `run-once.ts` itself still respects `gate.json`'s `checkTimeoutMs` per
+attempt, same as the Stop-hook gate. No new timeout mechanism.
 
-## Guest API
+**Output truncation is `run-once.ts`'s job, not the `Bash` tool's.** A real test suite's stdout
+can run to tens of KB; the `Bash` tool caps captured output, and if `run-once.ts`'s JSON marker
+line lands past that cap it never reaches Claude at all — the same judge-window failure mode this
+codebase has hit before, now with the *failing* tail as the part most likely to be cut. So
+`run-once.ts` self-truncates its own `output` field before printing — keep the **tail** (~4000
+chars; test-runner failures are almost always at the end), with an explicit in-band marker:
+`"...[truncated N of M chars]..."` prepended. The JSON marker line is always short enough to
+survive the `Bash` tool's own cap; truncation, when it happens, is visible in-band rather than
+silently swallowed further upstream.
 
-```ts
-interface GuestApi {
-  bash(cmd: string): Promise<{ code: number; output: string }>
-  check(): Promise<{ ok: boolean; output: string }>
-}
+## Path resolution (confirmed constraint, not just a risk)
+
+kkamak's own README already states it plainly: "`${CLAUDE_PLUGIN_ROOT}` only resolves inside a
+Claude Code command body, not in a plain shell." A script spawned by the `Bash` tool *is* a plain
+shell subprocess — if `SKILL.md` tells Claude to write a literal `${CLAUDE_PLUGIN_ROOT}` token
+into the script body for that subprocess to expand at its own runtime, it resolves to empty and
+`run-once.ts` is never found. This is confirmed from the existing artifact, not hypothetical.
+
+The mechanism `commands/init.md` already relies on is different and safe: Claude Code substitutes
+`${CLAUDE_PLUGIN_ROOT}` when it renders the command/skill *markdown* into context, before the
+model ever writes a line of script — by the time the model reads `SKILL.md`, any
+`${CLAUDE_PLUGIN_ROOT}` in that markdown text has already become a literal absolute path. So
+`SKILL.md` must instruct Claude to **inline the resolved path as a literal string into the script
+it writes**, never to re-emit the `${CLAUDE_PLUGIN_ROOT}` token for the spawned shell to expand.
+
+**Plan-time verification task** (not resolved by this spec, flagged for the implementation plan):
+confirm this rendering-time-substitution behavior empirically — load the skill in a real session
+and check what literal text appears in context where `SKILL.md` names `run-once.ts`'s path —
+before writing `SKILL.md`'s wording. If substitution does not occur the same way for skills as it
+does for commands, `SKILL.md` needs an explicit alternative (e.g., a documented fixed install
+path, or a small discovery step) instead.
+
+## Dogfood protocol (measurement, not shipped code)
+
+**The script must not be its own measurement instrument.** A script that self-logs
+`separateCallAfterFailure` cannot see whether a *different, later* Bash call was made — that
+happens outside the script's own process, after it has already exited. And the exact failure mode
+under study — a script that abandons the retry loop instead of running it — is also the failure
+mode most likely to skip writing an honest log line. Self-report is downstream of the behavior
+being measured; it can corroborate, it cannot verify. Measurement has to come from outside the
+measured artifact.
+
+**Observer: kkamak's existing `PostToolUse` hook**, extended to also match `Bash` (currently
+`Edit|MultiEdit|Write|NotebookEdit` only). `run-once.ts` prints one recognizable JSON marker line
+per invocation to stdout; the hook scans each `Bash` call's captured output for these markers —
+entirely from outside the script, after the tool call completes — and appends to
+`.km/oneshot-dogfood.ndjson`:
+
+```json
+{ "ts": ..., "sessionId": "...", "toolCallId": "...", "markersInCall": 2,
+  "finalMarkerOk": true }
 ```
 
-Two calls only for v1. No `api.commit` — there is nothing to commit (see Non-goals). A guest
-probing for more finds nothing: authorization by object identity (only these two functions are
-reachable from guest scope), not by a name-based allowlist.
+`markersInCall > 1` on one `Bash` call means a retry happened *inside that one call* — the
+property this design exists to buy. A later, separate `Bash` call whose output also contains
+`run-once.ts` markers, following an earlier call whose final marker was `ok:false`, is the
+abandoned-retry signal — computed by comparing consecutive hook-observed events, not by asking
+the script.
 
-## Data flow
+This fixes **steering-consumption rate**: of calls that hit `ok:false` at least once, how many
+resolve `ok:true` within the *same* `Bash` call — fully hook-observed, no self-report involved.
 
-1. Claude calls MCP tool `oneshot({ program })`.
-2. `mcp-server.ts` reads `gate.json`. If `oneshot.enabled` is not `true`, returns a `CONFIG_DISABLED`
-   verdict immediately — no worker spawned, nothing silently active.
-3. A Bun Worker is spawned running `guest-shell.ts` with `program` as the guest source.
-4. The guest calls `api.bash(...)` any number of times (each one real shell execution, cwd = repo
-   root, same semantics as `SpawnCheckRunner`'s spawn) and `api.check()` any number of times.
-5. Each `api.check()` runs `verifier.ts`'s `runCheck`, which shells out to the configured `check`
-   command exactly as the Stop-hook gate does today. `{ ok: false, output }` is returned into the
-   guest program as its return value — this *is* the steering; no separate steering object.
-6. The guest may retry (edit again, check again) inside its own execution, bounded by
-   `timeoutMs` (watchdog), `outputCapBytes`, and `pendingCallCap`.
-7. When the guest returns, errors, or hits a cap, the Worker is torn down and the MCP tool call
-   returns one result to Claude: final verdict, failure code if any, last check output.
+**Adoption rate stays open**, honestly: the hook only sees calls that *did* invoke `run-once.ts`;
+a task where Claude skipped `oneshot` entirely produces no row and no denominator. Closing that
+requires an externally-tracked task set (a human or a separate harness records which tasks were
+`oneshot`-shaped before the run, not derived from kkamak's own hook output) — out of scope for
+this spec, named here so it isn't silently assumed solved.
 
-## Failure codes (enumerated, fail-closed)
+Script self-report (a `{task, skillInvoked, ...}` line the script itself writes) may still exist
+as a cross-check **lower bound only**, explicitly labeled as such in any report that uses it —
+never the primary number.
 
-| Code | Trigger | Result |
+This is the actuation number the meta-harness lab explicitly left unmeasured (prior: 1/8). This
+design does not inherit that number — it measures its own, from outside the artifact under test.
+
+## Failure modes (script-level, translating the struck design's enumeration)
+
+| Mode | Trigger | Result |
 |---|---|---|
-| `CONFIG_DISABLED` | `oneshot.enabled` not `true` | no worker spawned |
-| `TIMEOUT` | guest execution exceeds `timeoutMs` | worker killed, treated as non-passing |
-| `OUTPUT_CAP_EXCEEDED` | combined `bash`/`check` output exceeds `outputCapBytes` | worker killed |
-| `PENDING_CALL_CAP_EXCEEDED` | more than `pendingCallCap` concurrent RPCs in flight | worker killed |
-| `GUEST_THROWN` | guest program throws | reported, worker torn down cleanly |
-| `WORKER_CRASHED` | worker thread dies unexpectedly | reported as non-passing |
+| check fails, rounds remain | `run-once.ts` → `ok:false` | script retries in-process, no new `Bash` call |
+| rounds exhausted | last retry still `ok:false` | script prints `{ok:false,...}`, exits 1 |
+| check exceeds `checkTimeoutMs` | per-attempt, same as Stop-hook gate | that attempt counts as `ok:false` |
+| total wall-clock exceeded | script itself runs too long | `Bash` tool's own call timeout kills it — not this design's mechanism, documented not implemented |
+| no `gate.json` / no `check` | `run-once.ts` finds nothing to run | clear error to stderr, exit 1, no silent success |
 
-None of these grant any privilege on the way out — a capped/killed run is always reported as
-not-passing, never silently treated as success.
+## Testing (automated)
 
-## Testing
-
-Oracle set (must pass):
-- honest program: one `bash` edit, one `check()` that passes → verdict ok, one tool call, one
-  worker spawn.
-- in-turn retry: `check()` fails once (fixture check command that fails on first invocation,
-  passes on second — no `Date.now()`-relative timing, a stateful fixture script instead), guest
-  retries `bash` + `check()` inside the same program, second `check()` passes → verdict ok,
-  **one** MCP tool call total (the retry must not cost a round trip — this is the property the
-  whole design exists to buy, and it must be a test, not a claim).
-
-Bad set (must fail closed, one fixture per failure code above):
-- `oneshot.enabled` absent → `CONFIG_DISABLED`, no worker process observed.
-- guest with an infinite loop → `TIMEOUT`.
-- guest that `bash`-prints past the cap → `OUTPUT_CAP_EXCEEDED`.
-- guest that fires more concurrent `bash` calls than `pendingCallCap` → `PENDING_CALL_CAP_EXCEEDED`.
-- guest that throws → `GUEST_THROWN`, worker torn down (no zombie process left — assert on
-  process table, not just the returned verdict).
-- isolation guard: `kernel/`/`adapters/` importing from `oneshot/` fails the grep-guard test
-  (built by temporarily adding such an import in the test fixture and asserting the guard catches
-  it — per this repo's rule to build the input that should break a check, not just read the
-  check's source).
+Deterministic, so this is ordinary TDD, not the dogfood protocol above:
+- `run-once.ts` against a passing check → `{ ok: true, output }`, exit 0.
+- `run-once.ts` against a failing check → `{ ok: false, output }`, exit 1, `output` carries the
+  check's real stdout/stderr.
+- `run-once.ts` respects `checkTimeoutMs` (fixture check that runs past it → treated as failing,
+  same as the Stop-hook gate's own timeout handling).
+- `run-once.ts` with no `gate.json` → clear error, non-zero exit, no silent success.
+- **the design-buying property, tested directly:** drive the script template (not a live model)
+  against a stateful fixture check that fails on its first invocation and passes on its second —
+  a real `.km`-local fixture script, not a `Date.now()`-relative timer. Assert `run-once.ts` is
+  invoked twice (the retry happened) while the outer script runs as a single process from a
+  single `Bash` call. This is "one Bash call, including the retry" made falsifiable — it is a
+  property of the script template's control flow, independent of whether a live model ever writes
+  such a script correctly (that part is the Dogfood protocol, below).
+- isolation guard: fails when a violating import from `kernel/`/`adapters/`/`runtime/` into
+  `skills/` is added to the fixture (built, not assumed).
 
 ## README
 
-The current line "kkamak has no command of its own beyond that: it reads `gate.json` and runs
-whatever `check` it names" becomes inaccurate the moment this ships and must be rewritten in the
-same change — not left stale. New scope statement: kkamak is "a completion gate, plus an
-experimental, OFF-by-default `oneshot` component that lets Claude batch edit+verify steps inline
-using the same check command." Installation/trust-model sections gain a paragraph: `oneshot`'s
-`api.bash` carries the same unsandboxed trust as the `check` command already does — read a
-repo's `gate.json` before enabling `oneshot` in it, same as you would its `check`.
+The line "kkamak has no command of its own beyond that: it reads `gate.json` and runs whatever
+`check` it names" becomes inaccurate the moment this ships and is rewritten in the same change.
+New scope statement: kkamak is "a completion gate, plus an `oneshot` skill that lets Claude batch
+an edit-verify loop into one script instead of one round trip per attempt, using the same check
+command and the same round budget the gate already enforces."
 
 ## Versioning
 
-Any merge touching `src/oneshot/`, `mcp-server.ts` registration in `plugin.json`, or the
-`gate.json` schema bumps `plugin.json`'s version in the same change (the version-keyed plugin
-cache serves stale code otherwise — prior incident). `gate.json`/`KKAMAK_DEV_CHECKS` drift guard
-gets an entry for the new `oneshot` config block.
-
-## Open questions (not blocking this design, flagged for later)
-
-- Pluggable typed verifier (`Verifier<C,S>` seam) — real extension point once a production
-  consumer of typed claims exists. Not built now (see Non-goals).
-- Whether `mcpServers` registration in `plugin.json` needs to be conditional at the manifest
-  level (vs. the tool-handler-level `CONFIG_DISABLED` check this design relies on) — needs
-  verification against current Claude Code plugin-manifest behavior before implementation;
-  flagged as a plan-time risk, not resolved here.
+Any merge touching `skills/oneshot/` bumps `plugin.json`'s version in the same change (version-
+keyed plugin cache serves stale code otherwise). No `gate.json` schema change in this revision, so
+no drift-guard entry needed this time.
