@@ -79,6 +79,24 @@ describe("cli-spawn provider", () => {
     expect(outcome).toEqual({ ok: false, kind: "call-consumed" })
   })
 
+  // K3 review, fix round 1: confirmed against the installed CLI's own
+  // --help that `--tools ""` is the documented disable-all-tools form, and
+  // that `--disallowedTools "*"` (this file's first draft) is undocumented
+  // wildcard usage. This test pins the ACTUAL flag emitted, not just that
+  // behavior happens to work regardless — the earlier tests never
+  // inspected argv beyond prompt/model position, so this gap was real.
+  test("zero-tools isolation emits the documented --tools \"\" form, not --disallowedTools", async () => {
+    const stub = writeStub(`
+      argv="$*"
+      if [[ "$argv" == *"--disallowedTools"* ]]; then echo '{"type":"result","is_error":true,"result":"used undocumented flag"}'; exit 0; fi
+      if [[ "$argv" != *'--tools '* ]]; then echo '{"type":"result","is_error":true,"result":"missing --tools"}'; exit 0; fi
+      echo '{"type":"result","subtype":"success","is_error":false,"result":"ok"}'
+    `)
+    const provider = makeCliSpawnProvider(stub)
+    const outcome = await provider("say hi", OPTS)
+    expect(outcome).toEqual({ ok: true, text: "ok", model: "claude-haiku-4-5", canonicalModel: "claude-haiku-4-5" })
+  })
+
   test("the prompt and model are passed through, never hardcoded", async () => {
     const stub = writeStub(`
       # Args: -p <prompt> --output-format json --model <model> --strict-mcp-config ...

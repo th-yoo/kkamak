@@ -24,19 +24,27 @@ interface ClaudeResultEvent {
  *
  * Isolation mapping (WarmIsolation -> CLI flags) has no direct repo
  * precedent — nothing in either repo cold-spawns `claude -p` under a
- * no-tools/strict-mcp isolation profile yet. --append-system-prompt,
- * --strict-mcp-config and --disallowedTools are documented Claude Code CLI
- * flags, applied here on best-available knowledge rather than a pinned
- * citation; worth confirming against a live CLI before this provider is
- * ever actually wired into the registry. */
+ * no-tools/strict-mcp isolation profile yet. --append-system-prompt and
+ * --strict-mcp-config are documented Claude Code CLI flags, applied here
+ * on best-available knowledge rather than a pinned citation. --tools
+ * (below) was confirmed directly against the installed CLI's own --help
+ * text (K3 review finding, fix round 1): `--tools ""` is the documented
+ * disable-all-tools form; a bare `--disallowedTools "*"` — this file's
+ * first draft — relies on undocumented wildcard semantics the CLI's help
+ * never claims (--disallowedTools takes concrete names/patterns, e.g.
+ * "Bash(git *) Edit", never a wildcard; a nonexistent literal tool named
+ * "*" would plausibly deny nothing, leaving default tools available).
+ * Documented flag beats undocumented wildcard, but neither is a LIVE
+ * one-call measurement yet — still worth confirming end-to-end before
+ * this provider is ever actually wired into the registry. */
 function buildArgs(prompt: string, opts: SendPromptOptions): string[] {
   const args = ["-p", prompt, "--output-format", "json", "--model", opts.model, "--strict-mcp-config"]
   if (opts.isolation.systemPrompt) args.push("--append-system-prompt", opts.isolation.systemPrompt)
   // WarmIsolation.tools is always [] (gauge/reasoning isolation never
-  // grants tools) — refuse every tool explicitly rather than relying on an
-  // empty allow-list, which some CLI flag shapes read as "unrestricted"
-  // instead of "nothing allowed".
-  if (opts.isolation.tools.length === 0) args.push("--disallowedTools", "*")
+  // grants tools) — the CLI's own --help documents `--tools ""` as the
+  // disable-all-tools form; a nonempty tools list (not currently reachable
+  // from any shipped WarmIsolation value) passes the names through.
+  args.push("--tools", opts.isolation.tools.join(" "))
   return args
 }
 
