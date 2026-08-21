@@ -114,7 +114,7 @@ chars; test-runner failures are almost always at the end), with an explicit in-b
 survive the `Bash` tool's own cap; truncation, when it happens, is visible in-band rather than
 silently swallowed further upstream.
 
-## Path resolution (confirmed constraint, not just a risk)
+## Path resolution (confirmed constraint AND confirmed mechanism, rev 6)
 
 kkamak's own README already states it plainly: "`${CLAUDE_PLUGIN_ROOT}` only resolves inside a
 Claude Code command body, not in a plain shell." A script spawned by the `Bash` tool *is* a plain
@@ -122,19 +122,14 @@ shell subprocess — if `SKILL.md` tells Claude to write a literal `${CLAUDE_PLU
 into the script body for that subprocess to expand at its own runtime, it resolves to empty and
 `run-once.ts` is never found. This is confirmed from the existing artifact, not hypothetical.
 
-The mechanism `commands/init.md` already relies on is different and safe: Claude Code substitutes
-`${CLAUDE_PLUGIN_ROOT}` when it renders the command/skill *markdown* into context, before the
-model ever writes a line of script — by the time the model reads `SKILL.md`, any
-`${CLAUDE_PLUGIN_ROOT}` in that markdown text has already become a literal absolute path. So
-`SKILL.md` must instruct Claude to **inline the resolved path as a literal string into the script
-it writes**, never to re-emit the `${CLAUDE_PLUGIN_ROOT}` token for the spawned shell to expand.
-
-**Plan-time verification task** (not resolved by this spec, flagged for the implementation plan):
-confirm this rendering-time-substitution behavior empirically — load the skill in a real session
-and check what literal text appears in context where `SKILL.md` names `run-once.ts`'s path —
-before writing `SKILL.md`'s wording. If substitution does not occur the same way for skills as it
-does for commands, `SKILL.md` needs an explicit alternative (e.g., a documented fixed install
-path, or a small discovery step) instead.
+**The actual mechanism, directly observed rather than assumed:** when Claude Code loads a skill,
+it prepends a line of the form `Base directory for this skill: <resolved absolute path>` before
+the skill's own content — the harness resolves the path once, at load time, and hands it to the
+model in-context. `SKILL.md` should instruct Claude to build `run-once.ts`'s path by joining
+*that reported base directory* with `run-once.ts`, never by writing `${CLAUDE_PLUGIN_ROOT}` (or
+any other token) into the script body for a subprocess to expand later. This replaces the
+previous "plan-time verification task, not resolved by this spec" — the mechanism is confirmed,
+not deferred.
 
 ## Dogfood protocol (measurement, not shipped code)
 
