@@ -76,7 +76,16 @@ kkamak never modifies your source files. It writes exactly three paths:
 - `.gitignore` — only to add a `.km/` line, same occasion, never duplicated.
 - `.km/` — gitignored runtime state and the append-only sensor log.
 
-kkamak has no command of its own beyond that: it reads `gate.json` and runs whatever `check` it names. Installing it and opening a repo with no `gate.json` changes nothing at all — the gate is inert until one exists.
+kkamak has one more component beyond that: `oneshot`, a skill (`skills/oneshot/`)
+that lets Claude batch an edit-verify loop into one script instead of one
+round trip per check attempt, using the same `check` command and the same
+`rounds` budget the gate already enforces. It adds no new trust boundary —
+the script runs through the same unsandboxed `Bash` tool Claude already
+has — and it is not required: nothing about the gate depends on it, and
+nothing about it depends on the gate beyond reading the same `gate.json`.
+See `skills/oneshot/SKILL.md` for what it does and how it's used.
+
+Beyond that, kkamak has no command of its own: it reads `gate.json` and runs whatever `check` it names. Installing it and opening a repo with no `gate.json` changes nothing at all — the gate is inert until one exists.
 
 **Trust model.** That `check` command is not sandboxed. It runs as a shell command with your full user privileges, in your working directory, on every turn that edited a file — without a Claude Code permission prompt, because a `Stop` hook is not a tool call. It can do anything you can do.
 
