@@ -181,8 +181,11 @@ whether a *later, separate* call also invokes `run-once.ts` — the call-boundar
 the hook has, since `run-once.ts`'s own log (Source 1) cannot tell which invocations happened
 inside the same Bash call versus different ones.
 
-**Correlating the two, per `Bash` call's time window** (that call's `PreToolUse` timestamp to its
-`PostToolUse` timestamp):
+**Correlating the two, per `Bash` call's time window.** No `PreToolUse` hook is added — ordering
+among consecutive `Bash` `PostToolUse` events in one session is enough: window _i_ spans from the
+previous `Bash` `PostToolUse` event's timestamp in that session (or session start, for the first)
+to this event's own timestamp. One new hook entry (Source 2, `PostToolUse`/`Bash` only) is still
+the whole addition to `hooks.json`.
 - *retries-happened-in-script* = count of Source-1 log lines falling inside the window,
   cross-checked against the static invocation count from Source 2's command-text scan.
   **A mismatch — fewer real log lines than the command text's retry loop implies — is itself a
