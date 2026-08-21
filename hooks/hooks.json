@@ -4,7 +4,8 @@
       { "hooks": [{ "type": "command", "command": "bun \"${CLAUDE_PLUGIN_ROOT}/src/adapters/claude-code/hook-cli.ts\" Stop", "timeout": 600 }] }
     ],
     "PostToolUse": [
-      { "matcher": "Edit|MultiEdit|Write|NotebookEdit", "hooks": [{ "type": "command", "command": "bun \"${CLAUDE_PLUGIN_ROOT}/src/adapters/claude-code/hook-cli.ts\" PostToolUse", "timeout": 30 }] }
+      { "matcher": "Edit|MultiEdit|Write|NotebookEdit", "hooks": [{ "type": "command", "command": "bun \"${CLAUDE_PLUGIN_ROOT}/src/adapters/claude-code/hook-cli.ts\" PostToolUse", "timeout": 30 }] },
+      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "bun \"${CLAUDE_PLUGIN_ROOT}/skills/oneshot/dogfood-hook-cli.ts\" PostToolUse", "timeout": 30 }] }
     ],
     "UserPromptSubmit": [
       { "hooks": [{ "type": "command", "command": "bun \"${CLAUDE_PLUGIN_ROOT}/src/adapters/claude-code/hook-cli.ts\" UserPromptSubmit", "timeout": 30 }] }

@@ -124,10 +124,24 @@ describe("Claude Code plugin manifests", () => {
   })
 
   // A matcher that drifts from EDIT_TOOLS means the gate silently stops arming.
-  test("the PostToolUse matcher is exactly EDIT_TOOLS", () => {
-    for (const { block } of blocks().filter((b) => b.event === "PostToolUse")) {
+  test("the gate's own PostToolUse block matcher is exactly EDIT_TOOLS", () => {
+    const gateBlocks = blocks().filter(
+      (b) => b.event === "PostToolUse" && b.block.hooks.some((h) => h.command.includes("adapters/claude-code/hook-cli.ts")),
+    )
+    expect(gateBlocks.length).toBeGreaterThan(0)
+    for (const { block } of gateBlocks) {
       expect(block.matcher).toBe(EDIT_TOOLS.join("|"))
     }
+  })
+
+  // oneshot's dogfood observer is additive: it matches Bash only, and must
+  // never touch the gate's own PostToolUse block above.
+  test("oneshot's dogfood-observer PostToolUse block matches only Bash", () => {
+    const dogfoodBlocks = blocks().filter(
+      (b) => b.event === "PostToolUse" && b.block.hooks.some((h) => h.command.includes("oneshot/dogfood-hook-cli.ts")),
+    )
+    expect(dogfoodBlocks.length).toBe(1)
+    expect(dogfoodBlocks[0]!.block.matcher).toBe("Bash")
   })
 
   test("the Stop hook gets room to run the check; the bookkeeping hooks do not need it", () => {
