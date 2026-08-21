@@ -5,6 +5,37 @@ All notable changes to this project are documented in this file, starting at 0.4
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Details for each entry live in [`docs/dogfood-log.md`](docs/dogfood-log.md), linked per entry below.
 
+## [0.8.0] - 2026-08-21
+
+A config-gated extension seam (`src/extensions/`), off by default, and one
+instrument built on it: `gauge`, a shadow measurement pass that never
+touches a gate decision. Full detail in [`docs/gauge.md`](docs/gauge.md).
+
+### Added
+
+- The extension seam itself: `Extension`, `ActiveExtensions`,
+  `loadActiveExtensions`/`loadActiveExtensionsFrom`
+  (`src/extensions/registry.ts`). `EXTENSIONS` is lazy — a disabled
+  extension's module, and any load-time side effect it carries, is never
+  imported. Enable an extension via `gate.json`'s `"extensions"` block;
+  nothing under `src/extensions/` runs otherwise.
+- `gauge`, wired into the real `Stop`/`UserPromptSubmit` path: on a
+  task-shaped prompt it requests one model-derived completion check (via
+  the `claude` CLI, default `claude-haiku-4-5`, capped at 30 calls/repo/day,
+  killable with `KKAMAK_GAUGE=off`); at the next `Stop` it shadow-evaluates
+  any pending derivation and annotates the sensor line with a `gauge`
+  field, never altering the `block`/`allow` decision itself.
+- `SensorLine.gauge` (optional, via the extension — the kernel's own
+  `SensorLine` type carries no gauge-specific fields).
+
+### Known limitations
+
+- `docs/known-issues.md` #14: gauge's held-line state assumes it is the
+  sole active extension — an entry gate for whoever adds a second one.
+- `docs/known-issues.md` #9 (addendum): the same not-comment-aware regex
+  root cause also hits `test/imports.test.ts`'s newer computed-dynamic-
+  import scanner, not just the original `from`-based one.
+
 ## [0.6.0] - 2026-08-12
 
 Cycle tagging: two sensor booleans that record which cycles have the shape

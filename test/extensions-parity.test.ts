@@ -18,6 +18,7 @@ import os from "node:os"
 import path from "node:path"
 import { createGate } from "../src/kernel/index.ts"
 import { INITIAL_STATE } from "../src/kernel/state.ts"
+import { KERNEL_VERSION } from "../src/kernel/sensor.ts"
 import { loadActiveExtensionsFrom } from "../src/extensions/registry.ts"
 import type { Extension, ExtensionContext } from "../src/extensions/registry.ts"
 import { gaugeDir, pickPending, writeGaugeFile } from "../src/extensions/gauge/files.ts"
@@ -165,7 +166,11 @@ describe("off-by-default parity: gauge registered but not enabled — full adapt
       rounds: ["accepted"],
       app: "claude-code",
       marker: false,
-      pluginVersion: "0.7.0",
+      // Not a hand-pinned literal: buildSensorLine (kernel/sensor.ts) always
+      // stamps the kernel's OWN current version here, by design — pinning a
+      // literal would make this test fail on every release bump for a
+      // reason that has nothing to do with K1-K4 parity.
+      pluginVersion: KERNEL_VERSION,
       product: "kkamak",
       roundsMax: 2,
       implOnly: true,

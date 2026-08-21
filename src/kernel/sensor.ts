@@ -7,7 +7,7 @@ import type { Clock, HostInfo, RoundOutcome, SensorLine } from "./ports.ts"
  * from the file at runtime, so this stays a plain literal and the kernel
  * stays free of I/O.
  */
-export const KERNEL_VERSION = "0.7.0"
+export const KERNEL_VERSION = "0.8.0"
 
 /**
  * Product-identity stamp (A3), stamped into every line's `product` field.

@@ -372,6 +372,25 @@ edit until the test stops complaining rather than to trust it — exactly the
 gate-avoidance shape recorded in this session's `docs/dogfood-log.md`
 correction to the 2026-08-11 entry.
 
+**Addendum (0.8.0, extension seam work).** The same root cause — a text
+regex that doesn't strip comments first — also hits a second, newer regex
+in the same file: `COMPUTED_CALL_PATTERN`
+(`test/imports.test.ts`'s "no dynamic import uses a computed specifier"
+test), added later to flag `import(...)`/`require(...)` calls whose
+specifier isn't a single literal string. It matches the literal words
+`import`/`require` followed by `(` with no comment-awareness either, so a
+doc comment that *describes* a computed-import pattern in prose — even to
+explain why one is forbidden — can trip it exactly like `from`-based prose
+tripped the scanner above. Hit for real, twice, during the K1-K6 extension-
+seam work: once in `src/extensions/registry.ts` (a comment illustrating the
+forbidden ``import(`./${name}.ts`)`` shape), once in
+`src/extensions/gauge/providers/cli-spawn.ts` (a comment reading
+"Self-registration on import (round-3 review...", where `import (` alone —
+no computed specifier anywhere nearby — was enough to match). Both were
+resolved the same way as the `from`-based instances above: reworded, not
+fixed at the scanner. Same judgement applies: recorded, not fixed, for the
+same reasons.
+
 ## Regression: `gate.json`'s `gauge` field was wrongly removed, then restored
 
 This repo's own tracked `gate.json` carries `"gauge": true`. The public
@@ -640,3 +659,34 @@ issue. `correlate.ts`'s empty output for that run was the honest, correct
 result given its actual inputs (an empty Source 2) — the fix belongs in
 how this environment's plugin is set up before the next dogfood attempt,
 not in `correlate.ts`.
+
+## 14. `gauge`'s held-line state assumes it is the sole active extension — entry gate for a second one
+
+`src/extensions/gauge/index.ts` keys its held-line state
+(`heldByHost`, a `WeakMap<GateHost, HeldLine[]>`) on the ORIGINAL
+(pre-wrap) `GateHost` object. Correctness depends on the SAME host
+instance reaching both `Extension.wrapHost` (via `ActiveExtensions
+.wrapHost`'s own `host` argument in `registry.ts`) and
+`Extension.afterDecision` (`registry.ts`'s closure-captured `host`). That
+holds today because `gauge` is the only extension `EXTENSIONS`
+(`src/extensions/registry.ts`) ever registers, and `ActiveExtensions
+.wrapHost`'s reduce (`active.reduce((h, ext) => ext.wrapHost(h, ctx),
+host)`) passes gauge the untouched original host.
+
+It stops holding the moment a SECOND extension is registered ahead of
+gauge in that reduce chain: whichever extension runs first would hand
+gauge an ALREADY-WRAPPED host, not the original one `afterDecision`
+still expects to find in the map — silently misrouting or losing gauge's
+own held lines, the same class of bug the K4 review's Q1 finding caught
+for the single-extension case (a module-global instead of a WeakMap).
+
+**Judgement: not a defect today** — there is exactly one registered
+extension, and the mechanism is correct under that condition, verified by
+a real two-host isolation test (`test/gauge-wiring.test.ts`'s "Q1
+(Critical)" describe block). It becomes one automatically the moment a
+second extension is added to `EXTENSIONS`. Whoever adds one: either give
+every extension its own per-extension WeakMap key (not a shared one keyed
+only on `GateHost`), or re-verify this exact correlation holds under the
+new reduce ordering, before shipping — don't assume ordering-independence
+without checking it the same way the K4 review did for the sole-extension
+case.
