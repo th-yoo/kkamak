@@ -4,6 +4,7 @@
 // only thing standing between "green in the repo" and "broken once installed".
 import { describe, expect, test } from "bun:test"
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 
 const PACKAGE_ROOT = path.resolve(import.meta.dir, "..")
@@ -35,16 +36,23 @@ function sourceFiles(dir: string): string[] {
  * dynamic `import(...)` with a literal specifier. A computed dynamic import
  * would slip past this, which is exactly why it is banned below.
  */
-function importsIn(file: string): ImportRef[] {
+export function importsIn(file: string): ImportRef[] {
   const source = fs.readFileSync(file, "utf8")
-  // The gap between the keyword and "from" excludes quote characters: a
-  // real import/export-from clause never contains one there (identifiers,
-  // braces, commas, whitespace only), but allowing [\s\S]*? to cross a
-  // quote let this bridge INTO a string literal and false-fire on prose
-  // that happens to end in the word "from" right before a closing quote
-  // (found live: a ported gauge/channel.ts prompt string, K2 port task).
+  // The gap between the keyword and "from" allows a quote ONLY inside a
+  // balanced {...} brace group — a real import/export clause can legally
+  // carry a quoted identifier there (ES2022 arbitrary module namespace
+  // names, e.g. exporting a quoted string literal under an `as` alias, a
+  // real tsc-valid re-export shape — but a
+  // bare quote OUTSIDE any brace group is never part of the clause itself.
+  // An earlier version excluded quotes entirely, which stopped a real
+  // false-positive (bridging into a ported prompt string's prose that
+  // happens to end a line in the word "from") but also blinded the scan to
+  // the quoted-namespace case above (K2 review finding). This form catches
+  // both: the brace-group alternative lets a quote through only when it is
+  // properly enclosed, so it can never reach past a stray top-level quote
+  // to bridge into unrelated string content.
   const pattern =
-    /(?:\b(?:import|export)\b[^"'`]*?\bfrom\s*|\bimport\s*|\brequire\s*)\(?\s*["']([^"']+)["']/g
+    /(?:\b(?:import|export)\b(?:[^"'`{}]|\{[^}]*\})*?\bfrom\s*|\bimport\s*|\brequire\s*)\(?\s*["']([^"']+)["']/g
   const refs: ImportRef[] = []
   for (const match of source.matchAll(pattern)) {
     if (match[1]) refs.push({ file, specifier: match[1] })
@@ -108,6 +116,7 @@ const callFixtures = JSON.parse(
 ) as {
   computedCallsThatShouldBeFlagged: [string, string][]
   literalCallsThatShouldNotBeFlagged: [string, string][]
+  quotedNamespaceReexportFixtures: [string, string][]
 }
 
 function rel(file: string): string {
@@ -340,6 +349,35 @@ describe("the scan detects violations it is meant to catch", () => {
   test("is not fooled by a directory whose name shares the boundary's prefix", () => {
     expect(classifyImport(KERNEL_FILE, "../kernel-extras/x.ts", KERNEL_DIR)).toBe("escapes")
   })
+
+  // ES2022 arbitrary module namespace identifiers — re-exporting a quoted
+  // string literal under an alias — are real, tsc-valid syntax (confirmed
+  // against tsc). A prior fix (K2 review) narrowed importsIn()'s import/
+  // export-to-"from"
+  // gap to exclude quote characters entirely, to stop it bridging across an
+  // unrelated export into a ported prompt string's prose — but that also
+  // blinded it to a quoted specifier legitimately living INSIDE the export
+  // clause's own brace group. The guard must catch this real class.
+  // Fixture text lives in import-scan-fixtures.json, not inline here, for
+  // the same reason the computed-call fixtures above do (see that const's
+  // own comment): a literal re-export-shaped string with a quoted brace
+  // group embedded directly in this .ts file would itself be scanned as if it
+  // were a real import of this file, self-inflicting the exact false-
+  // positive class this fix exists to avoid.
+  test.each(callFixtures.quotedNamespaceReexportFixtures)(
+    "extracts the specifier from %s (ES2022 arbitrary module namespace, tsc-valid)",
+    (_label, source) => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "imports-scan-test-"))
+      try {
+        const file = path.join(tmp, "reexport.ts")
+        fs.writeFileSync(file, source)
+        const refs = importsIn(file)
+        expect(refs.map((r) => r.specifier)).toContain("../../../escapes.ts")
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true })
+      }
+    },
+  )
 
   test.each(callFixtures.computedCallsThatShouldBeFlagged)(
     "flags %s as an unresolvable specifier",
