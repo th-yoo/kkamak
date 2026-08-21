@@ -37,8 +37,14 @@ function sourceFiles(dir: string): string[] {
  */
 function importsIn(file: string): ImportRef[] {
   const source = fs.readFileSync(file, "utf8")
+  // The gap between the keyword and "from" excludes quote characters: a
+  // real import/export-from clause never contains one there (identifiers,
+  // braces, commas, whitespace only), but allowing [\s\S]*? to cross a
+  // quote let this bridge INTO a string literal and false-fire on prose
+  // that happens to end in the word "from" right before a closing quote
+  // (found live: a ported gauge/channel.ts prompt string, K2 port task).
   const pattern =
-    /(?:\b(?:import|export)\b[\s\S]*?\bfrom\s*|\bimport\s*|\brequire\s*)\(?\s*["']([^"']+)["']/g
+    /(?:\b(?:import|export)\b[^"'`]*?\bfrom\s*|\bimport\s*|\brequire\s*)\(?\s*["']([^"']+)["']/g
   const refs: ImportRef[] = []
   for (const match of source.matchAll(pattern)) {
     if (match[1]) refs.push({ file, specifier: match[1] })
