@@ -4,11 +4,22 @@
 // sessions on the same machine will misattribute. Accepted limitation for
 // measurement tooling, not shipped-gate logic — see the implementation
 // plan's Global Constraints.
+//
+// Precondition: both logs must be read from the same root. run-once.ts
+// writes Source 1 relative to its own process.cwd(); dogfood-hook-cli.ts
+// writes Source 2 relative to the hook payload's cwd (the Claude Code
+// session's working directory). These are normally the same directory,
+// but a Bash call that `cd`s elsewhere before invoking run-once.ts splits
+// the two logs into different .km/ directories, silently breaking this
+// join (known-issues.md #12.3) — not checked at runtime here.
 
 export interface Source1Line {
   ts: number
   ok: boolean
-  output: string
+  /** Present only on a full log entry — see run-once.ts's shouldLogFull. */
+  output?: string
+  /** Present only on a light log entry (a non-final failing attempt). */
+  outputLength?: number
 }
 
 export interface Source2Line {
@@ -22,6 +33,14 @@ export interface CorrelatedWindow {
   markerCount: number
   attemptsObserved: number
   mismatch: boolean
+  /**
+   * TEMPORAL co-occurrence only: a false attempt followed by a true one in
+   * the same window. This does NOT establish that the model read and acted
+   * on the failure's `output` — it could have retried for an unrelated
+   * reason and happened to pass regardless. Never read this as proven
+   * causal steering use (known-issues.md #12.1; the meta-harness lab
+   * overclaimed exactly this once and had to retract it).
+   */
   steeringConsumed: boolean
   /** Last observed attempt in this window was ok:false (or no attempts at all). */
   endedInFailure: boolean
@@ -57,13 +76,8 @@ export function correlate(source1: Source1Line[], source2: Source2Line[]): Corre
     windowStart = call.ts
   }
 
-  // steering-consumption rate: of windows that hit ok:false at least once
-  // (regardless of how they ended), how many resolved ok:true in that same
-  // window.
   const windowsWithAnyFailure = windows.filter((w) => w.hadAnyFailure)
 
-  // abandoned retry: a window that ENDED in failure, followed by another
-  // window at all (a later Bash call that also invoked run-once.ts).
   let abandonedRetryCount = 0
   for (let i = 0; i < windows.length - 1; i++) {
     if (windows[i]!.endedInFailure) abandonedRetryCount++

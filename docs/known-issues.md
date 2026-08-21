@@ -481,3 +481,139 @@ a pure `INITIAL_STATE` reset, and its race window is the same narrow,
 un-widened one it always had (no `await` sits between the state load and
 this particular persist) — out of scope for what this review actually
 found, not a judgement that it is race-free.
+
+## 12. `oneshot`'s dogfood measurement — four minors from cross-lane checkpoint-3 review — RESOLVED
+
+Surfaced during meta-harness lane-B's independent review of the `oneshot`
+skill (`docs/superpowers/specs/2026-08-21-oneshot-design.md`,
+`docs/superpowers/plans/2026-08-21-oneshot.md`), after the suite was
+independently re-run there (458/458) and the shipped files checked against
+the plan's claims. Judged minors, not gates: none block using `oneshot` or
+change what it's safe to merge; recorded so the judgement is visible rather
+than silently deferred.
+
+1. **`correlate.ts`'s `steeringConsumed` is temporal co-occurrence, not
+   proven causal steering use.** `hadAnyFailure && lastOk` only says a
+   window contained a false attempt followed by a true one — it does not
+   establish that the model actually read and acted on the failure's
+   `output`, as opposed to retrying for an unrelated reason and happening
+   to pass. The header comment documents the session-id correlation
+   limitation but not this one. Follow-up: add a line to `correlate.ts`'s
+   header (or the `steeringConsumed` field's doc comment) making this
+   explicit — the meta-harness lab made exactly this overclaim once and
+   had to retract it; the metric here should never be read stronger than
+   what it actually establishes.
+
+2. **`run-once.ts` appends a full ~4k output tail to the dogfood log on
+   every attempt**, not just the final one. A chatty check (a large test
+   suite's failing output, repeated across several in-script retries)
+   bloats `.km/oneshot-dogfood.ndjson` faster than necessary for what the
+   log is actually used for (steering-consumption/mismatch counting, which
+   only needs `ok` + attempt count per window). Follow-up: consider logging
+   `{ts, ok, outputLength}` on non-final attempts and the full (truncated)
+   `output` only on the attempt that ends the window.
+
+3. **Source 1 and Source 2 can land in different directories.** `run-once.ts`
+   writes `.km/oneshot-dogfood.ndjson` relative to its own `process.cwd()`
+   (wherever the script that invoked it was run from); `dogfood-hook-cli.ts`
+   writes `.km/oneshot-dogfood-calls.ndjson` relative to the hook payload's
+   `cwd` (the Claude Code session's working directory). These are normally
+   the same directory, but a `Bash` call that `cd`s elsewhere before
+   invoking `run-once.ts` splits the two logs into different `.km/`
+   directories, silently breaking `correlate.ts`'s join. Follow-up: one doc
+   line in `correlate.ts`'s header noting this precondition (both logs must
+   be read from the same root) rather than a runtime check.
+
+4. **On a repo with no `gate.json`, `template.sh` burns its full
+   `rounds + 1` attempt budget on identical, unhelpful failures** — each
+   attempt's `run-once.ts` invocation reports the same "no gate.json with a
+   usable check found" error, and the loop has no way to distinguish that
+   from a real, possibly-fixable check failure. Harmless (bounded, same
+   failure every time, exits 1 same as it should), but wasted attempts.
+   Follow-up: `SKILL.md` could tell Claude to confirm `gate.json` exists
+   and has a `check` field before writing the retry loop at all.
+
+**Resolved**, all four, by dogfooding `oneshot` on itself: the fixes were
+written as one `oneshot`-shaped script (`run-once.ts`, `template.sh`,
+`correlate.ts`, `SKILL.md`, and their tests, rewritten in full) and run
+against this repo's own `gate.json` (`check: "bun test"`, `rounds: 2` →
+3 attempts) in a single `Bash` call, per `skills/oneshot/SKILL.md`.
+
+1. `correlate.ts`'s `steeringConsumed` field now carries a doc comment
+   stating plainly that it is temporal co-occurrence, not proven causal
+   steering use.
+2. `run-once.ts` now logs `{ts, ok, outputLength}` on non-final failing
+   attempts and the full truncated `output` only when an attempt is final
+   (`ok:true`, or `ONESHOT_FINAL_ATTEMPT=1` set by `template.sh` on its
+   last allowed attempt). Confirmed against the real dogfood log this
+   produced: attempts 1-2 (both failing, non-final) logged
+   `outputLength` only; attempt 3 (failing, final) logged full `output`.
+3. `correlate.ts`'s header now states the same-root precondition between
+   Source 1 and Source 2 explicitly.
+4. `SKILL.md` now instructs confirming `gate.json` exists before writing
+   the retry loop.
+
+**What the dogfood run itself found, unprompted:** all 3 real attempts
+failed identically — a genuine steering-not-consumed result, not a
+mechanism bug. The driver script's EDITS block wrote the same content on
+every retry (no correction between attempts), so the same test failure
+recurred 3 times and the budget exhausted for real: `test/oneshot-skill.
+test.ts`'s new assertion checked for the literal substring `"gate.json
+exists"`, but the `SKILL.md` prose it was checking reads `` `gate.json`
+exists `` — a markdown code-span backtick sits between the two words,
+so the literal substring never matched. Both were authored in the same
+pass and disagreed with each other. Fixed via the normal `Edit` fallback,
+per `SKILL.md`'s own step 6 ("if it exits 1 ... fall back to the normal
+edit/Stop-hook cycle") — `oneshot`'s own 3-attempt budget had already been
+spent on identical failures, so a 4th identical retry inside the same
+mechanism would not have helped.
+
+## 13. `oneshot`'s Source-2 marker count is blind to any indirection between the `Bash` call and `run-once.ts`
+
+Found during the dogfood run for #12, not one of the four minors reviewed
+at checkpoint-3 — a fresh discovery, not yet reviewed. `countMarkers`
+(`dogfood-hook-input.ts`) counts literal occurrences of the substring
+`"run-once.ts"` in `tool_input.command` — the outer command text Claude
+Code hands the `PostToolUse` hook. This only works when that text
+*directly* contains the invocation, matching `SKILL.md`'s literal
+prescription ("copy `template.sh`'s contents ... into one `Bash` tool
+call").
+
+The dogfood run for #12 did not do that: six files needed rewriting
+(`run-once.ts`, `template.sh`, `correlate.ts`, `SKILL.md`, two test
+files), so the actual `Bash` tool call invoked a driver script file
+(`bash /path/to/driver.sh <PLUGIN_ROOT> <MAX_ATTEMPTS>`) rather than
+inlining the template. `tool_input.command` for that real call was just
+that one line — it never contains the substring `"run-once.ts"` at all
+(confirmed: `countMarkers` on the real command text returns `0`), even
+though the driver script it invoked genuinely ran `run-once.ts` three
+times, and Source 1 genuinely recorded all three. Feeding
+`dogfood-hook-cli.ts` that real command line confirmed it: no
+`.km/oneshot-dogfood-calls.ndjson` was written at all, and `correlate.ts`
+against the real Source-1 log and an empty Source-2 correctly produced an
+empty report (`{"windows":[],"abandonedRetryCount":0}`) — accurate given
+the inputs, but zero observability into three real, successful attempts.
+
+Separately, even under the literal-inline usage pattern `SKILL.md`
+prescribes, `template.sh`'s own retry loop calls `run-once.ts` from a
+*single* line inside a `while` loop — the command text contains that
+substring once, regardless of how many times the loop actually retries
+at runtime. Static text-counting cannot distinguish "one invocation site
+that ran three times" from "one invocation site that ran once"; only
+Source 1's real log-line count can. `markerCount` is therefore, at best,
+a same-session-adopted-`oneshot`-at-all signal, not a retry-count signal
+— the spec's "structural retry-shape signal" and "mismatch = script
+crashed mid-loop" framing (`correlate.ts`'s header, `known-issues.md`
+#12.3's context) assumed `markerCount` would scale with real retries,
+which it does not for the loop shape `template.sh` itself ships.
+
+Not fixed here — beyond the four minors reviewed at checkpoint-3, needs
+its own review before any change. Two directions worth weighing, neither
+chosen yet: (a) accept Source 2 as an adoption-only signal (did `oneshot`
+get used at all this session) and stop calling `markerCount` a retry-count
+proxy anywhere in the docs; (b) have `run-once.ts` itself emit a
+distinguishable marker per real invocation to *its own stdout*, which
+`PostToolUse` genuinely cannot see (confirmed absent per #12.3's own
+`tool_response` finding) — meaning (b) may not be buildable at all under
+the current hook payload, which is itself worth confirming before
+proposing it as a fix.

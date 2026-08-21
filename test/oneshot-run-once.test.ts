@@ -61,8 +61,13 @@ describe("runOnce", () => {
 
 const RUN_ONCE = path.join(import.meta.dir, "..", "skills", "oneshot", "run-once.ts")
 
-async function spawnRunOnce(cwd: string): Promise<{ exitCode: number; stdout: string }> {
-  const proc = Bun.spawn(["bun", RUN_ONCE], { cwd, stdout: "pipe", stderr: "pipe" })
+async function spawnRunOnce(cwd: string, env: Record<string, string> = {}): Promise<{ exitCode: number; stdout: string }> {
+  const proc = Bun.spawn(["bun", RUN_ONCE], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, ...env } as Record<string, string>,
+  })
   const stdout = await new Response(proc.stdout as ReadableStream<Uint8Array>).text()
   const exitCode = await proc.exited
   return { exitCode, stdout }
@@ -98,5 +103,38 @@ describe("run-once.ts as a real subprocess", () => {
       .split("\n")
     expect(lines).toHaveLength(2)
     expect(JSON.parse(lines[0]!)).toMatchObject({ ok: true })
+  })
+})
+
+describe("dogfood log: full vs light entries (known-issues.md #12.2)", () => {
+  test("a non-final failing attempt logs a light entry: outputLength, no output", async () => {
+    writeGate("echo boom 1>&2; exit 1")
+    await spawnRunOnce(dir)
+    const line = JSON.parse(
+      fs.readFileSync(path.join(dir, ".km", "oneshot-dogfood.ndjson"), "utf8").trim(),
+    ) as { ok: boolean; output?: string; outputLength?: number }
+    expect(line.ok).toBe(false)
+    expect(typeof line.outputLength).toBe("number")
+    expect(line.output).toBeUndefined()
+  })
+
+  test("a final failing attempt (ONESHOT_FINAL_ATTEMPT=1) logs a full entry with output", async () => {
+    writeGate("echo boom 1>&2; exit 1")
+    await spawnRunOnce(dir, { ONESHOT_FINAL_ATTEMPT: "1" })
+    const line = JSON.parse(
+      fs.readFileSync(path.join(dir, ".km", "oneshot-dogfood.ndjson"), "utf8").trim(),
+    ) as { ok: boolean; output?: string }
+    expect(line.ok).toBe(false)
+    expect(line.output).toContain("boom")
+  })
+
+  test("a successful attempt always logs full output, even without ONESHOT_FINAL_ATTEMPT", async () => {
+    writeGate("echo hi")
+    await spawnRunOnce(dir)
+    const line = JSON.parse(
+      fs.readFileSync(path.join(dir, ".km", "oneshot-dogfood.ndjson"), "utf8").trim(),
+    ) as { ok: boolean; output?: string }
+    expect(line.ok).toBe(true)
+    expect(line.output).toContain("hi")
   })
 })

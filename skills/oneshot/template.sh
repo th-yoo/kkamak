@@ -23,6 +23,12 @@ while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do
   :
   # --- end EDITS ---
 
+  if [ "$attempt" -eq "$MAX_ATTEMPTS" ]; then
+    export ONESHOT_FINAL_ATTEMPT=1
+  else
+    unset ONESHOT_FINAL_ATTEMPT
+  fi
+
   if bun "$PLUGIN_ROOT/run-once.ts"; then
     exit 0
   fi

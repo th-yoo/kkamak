@@ -27,6 +27,18 @@ export async function runOnce(root: string): Promise<RunOnceResult | undefined> 
   return { ok: result.code === 0, output: truncateTail(result.output) }
 }
 
+/**
+ * A successful attempt always ends the retry loop, so it always gets a
+ * full log entry. A failing attempt only gets one when the caller has
+ * marked it final (ONESHOT_FINAL_ATTEMPT=1, set by template.sh on its
+ * last allowed attempt) — earlier failing attempts log only ok +
+ * outputLength, so a chatty check's full output isn't written once per
+ * retry (known-issues.md #12.2).
+ */
+export function shouldLogFull(result: RunOnceResult): boolean {
+  return result.ok || process.env.ONESHOT_FINAL_ATTEMPT === "1"
+}
+
 async function main(): Promise<void> {
   const root = process.cwd()
   const result = await runOnce(root)
@@ -35,7 +47,10 @@ async function main(): Promise<void> {
     process.exit(1)
   }
   process.stdout.write(`${JSON.stringify(result)}\n`)
-  appendNdjsonLine(path.join(root, DOGFOOD_LOG), { ts: Date.now(), ...result })
+  const logLine = shouldLogFull(result)
+    ? { ts: Date.now(), ok: result.ok, output: result.output }
+    : { ts: Date.now(), ok: result.ok, outputLength: result.output.length }
+  appendNdjsonLine(path.join(root, DOGFOOD_LOG), logLine)
   process.exit(result.ok ? 0 : 1)
 }
 

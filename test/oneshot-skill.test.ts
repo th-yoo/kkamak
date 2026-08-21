@@ -14,11 +14,6 @@ describe("skills/oneshot/SKILL.md", () => {
 
   test("never tells Claude to write a literal ${CLAUDE_PLUGIN_ROOT} token into a script", () => {
     const text = fs.readFileSync(SKILL, "utf8")
-    // The confirmed-broken pattern (rev 1/6): a literal token meant for a
-    // spawned subshell to expand at its own runtime. The doc MAY mention
-    // the token when explaining why NOT to use it, so this only fails if
-    // it appears inside a fenced shell code block (where it would actually
-    // be executed if copied verbatim).
     const codeBlocks = [...text.matchAll(/```(?:bash|sh)?\n([\s\S]*?)```/g)].map((m) => m[1]!)
     for (const block of codeBlocks) {
       expect(block).not.toContain("${CLAUDE_PLUGIN_ROOT}")
@@ -28,8 +23,6 @@ describe("skills/oneshot/SKILL.md", () => {
   test("references template.sh by relative path rather than inlining its content", () => {
     const text = fs.readFileSync(SKILL, "utf8")
     expect(text).toContain("template.sh")
-    // No duplicated retry-loop source: the distinctive loop line from
-    // template.sh should not also appear verbatim in SKILL.md.
     const template = fs.readFileSync(path.join(import.meta.dir, "..", "skills", "oneshot", "template.sh"), "utf8")
     const distinctiveLine = template.split("\n").find((l) => l.includes("MAX_ATTEMPTS"))!
     expect(text).not.toContain(distinctiveLine)
@@ -43,5 +36,14 @@ describe("skills/oneshot/SKILL.md", () => {
   test("mentions rounds + 1 as the attempt bound, matching the gate's own semantics", () => {
     const text = fs.readFileSync(SKILL, "utf8")
     expect(text.toLowerCase()).toMatch(/rounds.*\+.*1|rounds.*plus.*one/)
+  })
+
+  test("mentions confirming gate.json exists before running (known-issues.md #12.4)", () => {
+    const text = fs.readFileSync(SKILL, "utf8")
+    // Tolerant of markdown code-span backticks around `gate.json` — the
+    // literal substring "gate.json exists" doesn't survive normal prose
+    // ("`gate.json` exists"), which is exactly the mismatch the real
+    // dogfood run against this test caught (known-issues.md #12).
+    expect(text.toLowerCase()).toMatch(/gate\.json`?\s*exists/)
   })
 })

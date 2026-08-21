@@ -24,25 +24,30 @@ one script instead of across several tool calls.
 
 ## How to use it
 
-1. Note the "Base directory for this skill: ..." line reported when this
+1. Confirm `gate.json` exists and has a `check` field before doing
+   anything else — a quick `Read` or `test -f gate.json` is enough. On a
+   repo with no `gate.json`, every attempt fails identically with the same
+   "no gate.json" error, burning the full `rounds + 1` attempt budget for
+   no signal (known-issues.md #12.4) — cheaper to check first and fall
+   back to the normal edit/Stop-hook cycle if it's missing.
+2. Note the "Base directory for this skill: ..." line reported when this
    skill loaded — call it `PLUGIN_ROOT`. **Never** write the literal token
    `${CLAUDE_PLUGIN_ROOT}` into the script below — it does not resolve in a
    plain shell subprocess, only inside a Claude Code command body.
-2. Read this repo's `gate.json` and note its `rounds` value. The attempt
-   bound you pass to the template is `rounds + 1` — matching the gate's own
-   semantics exactly (`rounds=2` means up to 3 total checks before giving
-   up, not 2).
-3. Copy `PLUGIN_ROOT/template.sh`'s contents (see that file — it is the
+3. Note `gate.json`'s `rounds` value. The attempt bound you pass to the
+   template is `rounds + 1` — matching the gate's own semantics exactly
+   (`rounds=2` means up to 3 total checks before giving up, not 2).
+4. Copy `PLUGIN_ROOT/template.sh`'s contents (see that file — it is the
    canonical script, do not retype it from memory) into one `Bash` tool
    call. Replace the `# --- EDITS ---` / `# --- end EDITS ---` block with
    your real edit commands. Fill in `$1` (PLUGIN_ROOT) and `$2`
    (`rounds + 1`) as literal arguments, or as the first two lines of the
    script if you prefer not to pass them positionally.
-4. Run it as a single `Bash` call. Exit 0 means the check passed within the
+5. Run it as a single `Bash` call. Exit 0 means the check passed within the
    attempt budget; exit 1 means it did not. Either way, the last JSON line
    printed carries `{ok, output}` from the most recent attempt — read
    `output` if `ok` is `false` to see what still needs fixing.
-5. If it exits 1, you have real information about what is still wrong —
+6. If it exits 1, you have real information about what is still wrong —
    fix it and either run `oneshot` again or fall back to the normal
    edit/Stop-hook cycle. Nothing about `oneshot` prevents that fallback.
 
