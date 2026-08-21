@@ -617,3 +617,26 @@ distinguishable marker per real invocation to *its own stdout*, which
 `tool_response` finding) — meaning (b) may not be buildable at all under
 the current hook payload, which is itself worth confirming before
 proposing it as a fix.
+
+**Why the #12 dogfood run's own `correlate.ts` output was empty (a second,
+separate cause from the indirection problem above — verified, not
+assumed):** the session that ran the #12 dogfood exercise had no
+`oneshot`-aware `PostToolUse` hook active *at all*, at any version. The
+active `kkamak`-named plugin in that environment
+(`~/.claude/plugins/known_marketplaces.json`'s `kkamak-local` entry) is
+sourced from `/home/th-yoo/z2/meta-harness/cc-gate-plugin` — a different
+repository from `~/z2/kkamak`, where `oneshot` was built — cached at
+`0.4.0` (`~/.claude/plugins/installed_plugins.json`). `~/z2/kkamak` itself
+has no marketplace registration in that environment. This is not "0.7.0
+hasn't reached the plugin cache yet" (a propagation delay that resolves
+once the version bumps and the cache updates) — it is that the installed
+plugin was never sourced from `~/z2/kkamak` in the first place, at any
+version, so no version bump on this side changes it. Real Source-2 data
+requires either registering `~/z2/kkamak` as its own installed plugin (per
+this repo's own README) in a session that will actually dogfood it, or
+porting `oneshot` into `cc-gate-plugin`/`km-crank` separately — a
+different, not-yet-scoped piece of work, not a wait-for-deploy timing
+issue. `correlate.ts`'s empty output for that run was the honest, correct
+result given its actual inputs (an empty Source 2) — the fix belongs in
+how this environment's plugin is set up before the next dogfood attempt,
+not in `correlate.ts`.
