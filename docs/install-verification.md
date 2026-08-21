@@ -177,19 +177,23 @@ dir from an earlier run, for instance):
 ls -d "$CLAUDE_CONFIG_DIR/plugins/cache/kkamak/kkamak/"*/
 ```
 
-This must print exactly one path, ending in `/0.6.0/`.
+This must print exactly one path, ending in `/0.8.0/`.
 
 Confirm the files this release adds are present in that one version
-directory (these are new in `0.4.0`; their absence would mean the cache
-somehow holds a pre-0.4.0 copy despite the version string). Capture the
-directory step 2 already confirmed rather than retyping the version segment:
+directory. `src/cli/init-cli.ts`/`commands/init.md` are new in `0.4.0`;
+`src/extensions/registry.ts`/`src/extensions/gauge/index.ts` are new in
+`0.8.0` (the extension seam and the `gauge` instrument built on it) — their
+absence would mean the cache holds a copy older than the version string
+claims. Capture the directory step 2 already confirmed rather than
+retyping the version segment:
 
 ```bash
 KK=$(ls -d "$CLAUDE_CONFIG_DIR/plugins/cache/kkamak/kkamak/"*/ | head -1)
-ls "$KK/src/cli/init-cli.ts" "$KK/commands/init.md"
+ls "$KK/src/cli/init-cli.ts" "$KK/commands/init.md" \
+   "$KK/src/extensions/registry.ts" "$KK/src/extensions/gauge/index.ts"
 ```
 
-Both must exist.
+All four must exist.
 
 ## 3. Live block proof
 
@@ -308,7 +312,7 @@ list two `"verify-failed"` entries. `"accepted"` will read `true` here too —
 that field means "the stop was ultimately allowed through" (exhaustion always
 ends by allowing the stop), not "the check passed"; no code path ever writes
 `"accepted": false`, so it is not useful as a failure signal on its own.
-`"pluginVersion"` must read `"0.6.0"` — that field is the durable proof that
+`"pluginVersion"` must read `"0.8.0"` — that field is the durable proof that
 the session ran the copy this release installed, not a leftover older one.
 
 ## 4. Cleanup
@@ -463,7 +467,7 @@ podman exec -e PATH="$CPATH" "$NAME" cat /root/kkamak-check/.km/gate-outcomes.nd
 ```
 
 `gateExhausted: true`, `rounds` listing two `"verify-failed"` entries,
-`pluginVersion: "0.6.0"`.
+`pluginVersion: "0.8.0"`.
 
 **Cleanup — shred the credential export, then remove the container:**
 
