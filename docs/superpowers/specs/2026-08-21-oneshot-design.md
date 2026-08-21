@@ -137,35 +137,57 @@ mode most likely to skip writing an honest log line. Self-report is downstream o
 being measured; it can corroborate, it cannot verify. Measurement has to come from outside the
 measured artifact.
 
-**Observer: kkamak's existing `PostToolUse` hook**, extended to also match `Bash` (currently
-`Edit|MultiEdit|Write|NotebookEdit` only). `run-once.ts` prints one recognizable JSON marker line
-per invocation to stdout; the hook scans each `Bash` call's captured output for these markers —
-entirely from outside the script, after the tool call completes — and appends to
-`.km/oneshot-dogfood.ndjson`:
+**Corrected against the real payload (rev 3):** Claude Code's `PostToolUse` hook carries
+`tool_input` (what Claude asked to run) but not the tool's result — there is no `tool_response`
+field to scan for output, confirmed against the official hooks reference (searched in full: zero
+occurrences of `tool_response`/`tool_output`; the docs' own worked example for logging Bash calls
+via `PostToolUse` extracts only `tool_input.command`, never a result). Rev 2's "scan the Bash
+call's output for markers" cannot be built. Two independent, external sources replace it:
+
+**Source 1 — `run-once.ts`'s own log write.** `run-once.ts` is fixed, host-authored code, not
+something Claude's wrapper script controls or can suppress the honesty of. On every real
+invocation it appends one line to `.km/oneshot-dogfood.ndjson` (same `NdjsonSensorSink`
+convention the gate already uses), computed from the same real check result the gate itself
+verifies against:
 
 ```json
-{ "ts": ..., "sessionId": "...", "toolCallId": "...", "markersInCall": 2,
-  "finalMarkerOk": true }
+{ "ts": ..., "ok": false, "output": "...(same tail-truncated field as the stdout marker)..." }
 ```
 
-`markersInCall > 1` on one `Bash` call means a retry happened *inside that one call* — the
-property this design exists to buy. A later, separate `Bash` call whose output also contains
-`run-once.ts` markers, following an earlier call whose final marker was `ok:false`, is the
-abandoned-retry signal — computed by comparing consecutive hook-observed events, not by asking
-the script.
+This is not the wrapper self-reporting a summary — it is a probe that fires whenever the helper
+actually runs, regardless of whether the wrapper "wants" to be honest about it.
 
-This fixes **steering-consumption rate**: of calls that hit `ok:false` at least once, how many
-resolve `ok:true` within the *same* `Bash` call — fully hook-observed, no self-report involved.
+**Source 2 — the `PostToolUse` hook, extended to also match `Bash`** (currently
+`Edit|MultiEdit|Write|NotebookEdit` only), reading `tool_input.command` — a real, documented
+field — not to recover output, but to see the **command text itself**: a static count of how many
+times that one call's command invokes `run-once.ts` (does the script Claude wrote even attempt a
+retry loop, structurally), and, across consecutive `Bash` `PostToolUse` events in a session,
+whether a *later, separate* call also invokes `run-once.ts` — the call-boundary information only
+the hook has, since `run-once.ts`'s own log (Source 1) cannot tell which invocations happened
+inside the same Bash call versus different ones.
 
-**Adoption rate stays open**, honestly: the hook only sees calls that *did* invoke `run-once.ts`;
-a task where Claude skipped `oneshot` entirely produces no row and no denominator. Closing that
-requires an externally-tracked task set (a human or a separate harness records which tasks were
-`oneshot`-shaped before the run, not derived from kkamak's own hook output) — out of scope for
-this spec, named here so it isn't silently assumed solved.
+**Correlating the two, per `Bash` call's time window** (that call's `PreToolUse` timestamp to its
+`PostToolUse` timestamp):
+- *retries-happened-in-script* = count of Source-1 log lines falling inside the window,
+  cross-checked against the static invocation count from Source 2's command-text scan.
+  **A mismatch — fewer real log lines than the command text's retry loop implies — is itself a
+  finding** (the script crashed or exited mid-loop), reported as such, not discarded as noise.
+- *steering-consumption* = within one window, the last Source-1 line's `ok` is `true` after at
+  least one earlier `ok:false` line in the same window.
+- *abandoned-retry* (separate call after failure) = a window whose last Source-1 line is
+  `ok:false`, followed by the **next** `Bash` `PostToolUse` event in the same session whose
+  command text also invokes `run-once.ts` — Claude made a fresh call instead of the first script
+  retrying further.
 
-Script self-report (a `{task, skillInvoked, ...}` line the script itself writes) may still exist
-as a cross-check **lower bound only**, explicitly labeled as such in any report that uses it —
-never the primary number.
+This fixes **steering-consumption rate** — of windows that hit `ok:false` at least once, how many
+resolve `ok:true` in the same window — from two sources genuinely outside the measured wrapper
+script, neither of which the wrapper's own honesty can compromise.
+
+**Adoption rate stays open**, honestly: both sources only produce rows for calls that *did*
+invoke `run-once.ts`; a task where Claude skipped `oneshot` entirely produces no row and no
+denominator. Closing that requires an externally-tracked task set (a human or a separate harness
+records which tasks were `oneshot`-shaped before the run) — out of scope for this spec, named
+here so it isn't silently assumed solved.
 
 This is the actuation number the meta-harness lab explicitly left unmeasured (prior: 1/8). This
 design does not inherit that number — it measures its own, from outside the artifact under test.
