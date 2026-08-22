@@ -393,3 +393,45 @@ describe("the scan detects violations it is meant to catch", () => {
     },
   )
 })
+
+describe("known holes", () => {
+  // KNOWN-HOLE(KI-9) — known-issues #9 addendum (0.8.0, extension-seam work):
+  // COMPUTED_CALL_PATTERN is a text regex with no comment-awareness either
+  // (the same root cause as the from-based scanner above). Two reword-to-pass
+  // events on record: src/extensions/registry.ts (a comment illustrating the
+  // forbidden `import(`./${name}.ts`)` shape) and
+  // src/extensions/gauge/providers/cli-spawn.ts (a comment reading
+  // "Self-registration on import (round-3 review...", where `import (` alone
+  // — no computed specifier anywhere nearby — was enough to match). Both were
+  // resolved by rewording the comment, not by fixing the scanner. (The
+  // sibling `importsIn()`/`from`-based false positive that #9's main body
+  // describes — the file-state-store.ts "old and merely / slow" prose — no
+  // longer reproduces: the K2 quoted-namespace fix's quote-exclusion in the
+  // import/export-to-"from" gap closed that specific bridging shape as a side
+  // effect. This marker pins the addendum's still-open instance instead.)
+  // Unskip when comments are stripped before the regex or a real parser
+  // lands.
+  test.skip("KNOWN-HOLE(KI-9): a comment describing a forbidden import(...) shape is not flagged as a computed call", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "imports-scan-test-"))
+    try {
+      const file = path.join(tmp, "prose.ts")
+      // Recorded prose shape (known-issues.md #9 addendum, cli-spawn.ts
+      // incident): a comment describing/forbidding a computed-import pattern
+      // trips COMPUTED_CALL_PATTERN even with no real computed call anywhere
+      // in the file.
+      fs.writeFileSync(
+        file,
+        [
+          "// Self-registration on import (round-3 review...) happens in the constructor.",
+          "export const x = 1",
+          "",
+        ].join("\n"),
+      )
+      const source = fs.readFileSync(file, "utf8")
+      const matches = [...source.matchAll(new RegExp(COMPUTED_CALL_PATTERN, "g"))]
+      expect(matches).toEqual([]) // DESIRED: prose in a comment yields zero computed-call matches
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+})

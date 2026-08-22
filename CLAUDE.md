@@ -1,0 +1,1 @@
+Known-open holes carry a calibrated skip-marker test (KNOWN-HOLE(<id>) — see meta-harness docs/loop-probes/debt-instrument-20260822/): a partial fix or deferral lands WITH its marker; unskipping is the revisit.
