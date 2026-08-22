@@ -66,6 +66,23 @@ async function runHook(payload: Record<string, unknown>): Promise<void> {
   await proc.exited
 }
 
+describe("known holes", () => {
+  // KNOWN-HOLE(KI-13) — known-issues #13: marker blind to indirection; needs
+  // its own review before any change (this marker pins the behavior, decides
+  // nothing about the fix). #13's exact indirection shape (from the #12
+  // dogfood run): "the actual `Bash` tool call invoked a driver script file
+  // (`bash /path/to/driver.sh <PLUGIN_ROOT> <MAX_ATTEMPTS>`) rather than
+  // inlining the template. `tool_input.command` for that real call was just
+  // that one line — it never contains the substring `"run-once.ts"` at all
+  // (confirmed: `countMarkers` on the real command text returns `0`), even
+  // though the driver script it invoked genuinely ran `run-once.ts` three
+  // times, and Source 1 genuinely recorded all three."
+  test.skip("KNOWN-HOLE(KI-13): a Bash call that indirects through a driver script counts zero markers even though run-once.ts ran three times inside it", () => {
+    const cmd = "bash /path/to/driver.sh /plugin/root 3"
+    expect(countMarkers(cmd)).toBe(3) // DESIRED: marker count includes the indirect write
+  })
+})
+
 describe("dogfood-hook-cli.ts as a real subprocess", () => {
   test("writes one line for a Bash call that invokes run-once.ts", async () => {
     await runHook({
