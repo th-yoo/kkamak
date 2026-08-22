@@ -125,3 +125,56 @@ describe("loadActiveExtensionsFrom", () => {
     expect(unusedLoaderCalled).toBe(false)
   })
 })
+
+describe("known holes", () => {
+  // KNOWN-HOLE(KI-14) — known-issues #14: gauge's held-line state keys a
+  // WeakMap<GateHost, HeldLine[]> on the ORIGINAL (pre-wrap) host, correct
+  // only because gauge is the SOLE extension `wrapHost`'s reduce
+  // (`active.reduce((h, ext) => ext.wrapHost(h, ctx), host)`) ever hands the
+  // untouched original host to. #14's own sentence for the property this
+  // pins: "It stops holding the moment a SECOND extension is registered
+  // ahead of gauge in that reduce chain: whichever extension runs first
+  // would hand gauge an ALREADY-WRAPPED host, not the original one
+  // `afterDecision` still expects to find in the map — silently misrouting
+  // or losing gauge's own held lines" — and #14 says this "becomes [a
+  // defect] automatically the moment a second extension is added to
+  // EXTENSIONS." This test builds that exact two-extension shape via
+  // `loadActiveExtensionsFrom`'s explicit-registry seam (no production
+  // change needed — the seam already exists for test injection) with a
+  // gauge-shaped fake ("second") that keys a WeakMap on whatever host object
+  // its own wrapHost receives, alphabetically preceded by "first" (an
+  // unrelated extension whose wrapHost hands back a NEW host object, per
+  // registry.ts's sorted-name reduce order). Unskip when every extension
+  // gets its own per-extension WeakMap key, or the reduce ordering is
+  // re-verified not to matter, per #14's own remediation options.
+  test.skip("KNOWN-HOLE(KI-14): a host-keyed WeakMap set in wrapHost is unreachable from afterDecision once a second extension runs first in the reduce", async () => {
+    const { host } = makeHarness({ raw: '{"check":"x","extensions":{"first":true,"second":true}}' })
+
+    const heldByHost = new WeakMap<GateHost, string>()
+    let recovered: string | undefined
+    const second = fakeExtension({
+      name: "second",
+      wrapHost: (h) => {
+        heldByHost.set(h, "held-line") // gauge's real shape: key on whatever wrapHost receives
+        return h
+      },
+      afterDecision: async (_e, _d, h) => {
+        recovered = heldByHost.get(h) // gauge's real shape: look up via afterDecision's own host param
+      },
+    })
+    const first = fakeExtension({
+      name: "first",
+      wrapHost: (h) => ({ ...h }), // hands "second" an ALREADY-WRAPPED host, not the original
+    })
+
+    const ext = await loadActiveExtensionsFrom(
+      host,
+      { first: async () => first, second: async () => second },
+      CTX,
+    )
+    ext.wrapHost(host)
+    await ext.afterDecision(STOP, ALLOW)
+
+    expect(recovered).toBe("held-line") // DESIRED: correlation survives a second extension ahead in the chain
+  })
+})
