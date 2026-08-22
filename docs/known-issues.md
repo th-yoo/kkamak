@@ -391,6 +391,22 @@ resolved the same way as the `from`-based instances above: reworded, not
 fixed at the scanner. Same judgement applies: recorded, not fixed, for the
 same reasons.
 
+**Correction (2026-08-22).** The from-based instance this section's main
+body describes (the `file-state-store.ts` "old and merely / slow" prose,
+`importsIn()`'s scanner) no longer reproduces on `main`: a later, unrelated
+fix (K2 review, ES2022 quoted-namespace re-export handling) narrowed
+`importsIn()`'s import/export-to-`from` gap to exclude quote characters
+(`test/imports.test.ts`'s "ES2022 arbitrary module namespace" comment) —
+that narrowing incidentally closes the specific bridging shape this
+instance relied on, as a side effect, not as a deliberate fix for this
+issue. The regex quoted at the top of this section (with an unbounded
+`[\s\S]*?` gap between `from` and the quoted string) is therefore stale;
+see `test/imports.test.ts:55` for the shipped pattern. The issue remains
+OPEN via the addendum's `COMPUTED_CALL_PATTERN` instance immediately above,
+which has no comparable exclusion and still trips on prose describing a
+forbidden `import(...)` shape — now pinned by the `KNOWN-HOLE(KI-9)` marker
+in `test/imports.test.ts`.
+
 ## Regression: `gate.json`'s `gauge` field was wrongly removed, then restored
 
 This repo's own tracked `gate.json` carries `"gauge": true`. The public

@@ -77,6 +77,13 @@ describe("known holes", () => {
   // (confirmed: `countMarkers` on the real command text returns `0`), even
   // though the driver script it invoked genuinely ran `run-once.ts` three
   // times, and Source 1 genuinely recorded all three."
+  //
+  // Unskip when direction (b) lands — run-once.ts emits a per-invocation
+  // marker the hook can attribute — and this test then pins it. If #13
+  // resolves as direction (a) instead (Source 2 accepted as an
+  // adoption-only signal, markerCount no longer claimed as a retry-count
+  // proxy), the hole is closed by definition: do NOT unskip — delete this
+  // marker and record why.
   test.skip("KNOWN-HOLE(KI-13): a Bash call that indirects through a driver script counts zero markers even though run-once.ts ran three times inside it", () => {
     const cmd = "bash /path/to/driver.sh /plugin/root 3"
     expect(countMarkers(cmd)).toBe(3) // DESIRED: marker count includes the indirect write
