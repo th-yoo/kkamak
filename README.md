@@ -4,6 +4,8 @@ kkamak is a completion gate for Claude Code: it stops the agent from claiming a 
 
 When Claude finishes a turn in which it edited files, the gate runs your check. If the check fails, Claude is blocked and handed the failure output, and it has to keep working. After a configured number of failed rounds the gate gives up and lets the turn through, so it can never trap a session.
 
+It answers *is it broken*, precisely. It says nothing about *is it finished*, and a green check is not evidence that new code is correct — see [What a green check is evidence of](#what-a-green-check-is-evidence-of) before you rely on it.
+
 ```mermaid
 flowchart LR
     E[Claude edits files] --> S[Claude tries to end the turn]
@@ -53,7 +55,15 @@ Or write it yourself at the directory you launch Claude Code from — normally t
 
 That location is not a guess: the gate reads `gate.json` from the working directory Claude Code reports in its hook payload, and never searches upward from it. Launch Claude Code from a subdirectory that has no `gate.json` and the gate finds no config and does nothing — which, per "Confirm it loaded" above, looks exactly like a check that always passes.
 
-Keep the check cheap. It runs every time the agent tries to finish a turn in which it edited a file — not once at the end of a session — so a slow check is paid over and over.
+Keep the check cheap — but the cost is milder than it sounds. It runs when the agent tries to *end a turn* that edited a file, not on every edit. Arming is per-session and resets on a clean accept, so a long turn that edits twenty files pays for one check, and sessions that run multi-minute turns produce few cycles. The `oneshot` skill below batches an edit-verify loop into a single call for the same reason.
+
+**Tiered checks.** Where the full suite is slow, point `check` at a fast subset and let CI run the rest. The split that matters is not fast-vs-slow but *what each tier can observe*: the gate runs on your machine, so it cannot see a dependence on your machine. Give CI at least one step that strips the environment —
+
+```yaml
+- run: env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN HOME=/tmp/no-creds bun test
+```
+
+as its own step rather than folded into the normal one, because the normal step being credential-less today is incidental and stops being true the day a key is wired in for something unrelated.
 
 | field            | required | default                     | meaning |
 |------------------|----------|------------------------------|---------|
@@ -146,8 +156,25 @@ Fields:
 
 All optional fields may be absent from any given line; a consumer must tolerate that.
 
+## What a green check is evidence of
+
+kkamak is a floor, not an oracle. It is worth being precise about what that buys, because the maintainer has been running it on itself since July and the numbers are not flattering — they are recorded in [`docs/dogfood-log.md`](docs/dogfood-log.md), including the entries that make the tool look bad.
+
+**Breakage detection is real.** A signature change that rippled through the kernel, both adapters and every test double did not break 319 pre-existing tests — a checkable fact the gate confirmed rather than an assumption.
+
+**Coverage is not.** Across the thirteen cycles recorded on the current kernel in this repo, the gate caught **zero** real defects and produced one false positive. Every genuine defect on record — a store race, an unguarded reverse-ordering in the fix for it, a doc claim the code contradicted — was found by review *after* the gate had accepted the code with a fully green suite. On a second repo, tracked as a separate stream and not pooled with this one, it accepted nine of nine cycles while GitHub Actions was failing on three of the commits it let through.
+
+Three structural reasons, none of them fixable by a better gate:
+
+- **A test written beside the implementation it checks passes by construction.** The author already knows what the code does. A green cycle is strong evidence nothing *pinned* broke, and much weaker evidence that the new logic is right.
+- **A check cannot observe a dependence on the environment it runs in** — it *is* that environment. Tests that pass locally because your machine has credentials fail on the first machine without them.
+- **The cheapest way to go green is not always the correct fix.** Skipping a test, deleting a superseded function's replacement instead of the function, or rewording code until a linter stops complaining are all green moves. A skipped test under a green gate is indistinguishable from a passing one.
+
+None of this is a defect in kkamak — it is what a check-command gate is. Use it as a floor that stops obviously-broken work from being declared done, and keep review and CI for everything else.
+
 ## Docs
 
+- [`docs/dogfood-log.md`](docs/dogfood-log.md) — the maintainer's log of running kkamak on kkamak: per-session sensor numbers and the observations the stream cannot see. It cites a private repo for provenance; the factual content stands without it.
 - [`docs/opencode.md`](docs/opencode.md) — the experimental opencode adapter.
 - [`docs/gauge.md`](docs/gauge.md) — the `gauge` extension: what it does, its cost, its kill switch, and live-call evidence that it works end to end.
 - [`CHANGELOG.md`](CHANGELOG.md) — notable changes.
